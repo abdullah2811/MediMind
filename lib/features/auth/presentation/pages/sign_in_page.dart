@@ -54,16 +54,18 @@ class _SignInPageState extends State<SignInPage> {
               padding: const EdgeInsets.all(16),
               shrinkWrap: true,
               children: [
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Expanded(
-                      child: Text(
-                        context.tr('app_name'),
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.headlineMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: const Color(0xFF153E75),
-                        ),
+                    Text(
+                      context.tr('app_name'),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.headlineMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: const Color(0xFF153E75),
                       ),
                     ),
                     const LanguageToggleButton(),

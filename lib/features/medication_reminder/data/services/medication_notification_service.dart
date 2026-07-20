@@ -54,9 +54,6 @@ class MedicationNotificationService {
   Future<void> scheduleMedication(Medication medication) async {
     await initialize();
     await cancelMedicationById(medication.id);
-    if (!medication.isActive) {
-      return;
-    }
 
     final doseTimes = medication.doseTimes.isNotEmpty
         ? medication.doseTimes
@@ -97,21 +94,40 @@ class MedicationNotificationService {
         matchDateTimeComponents: DateTimeComponents.time,
       );
     }
+
+    if (medication.mealScheduleEnabled) {
+      final mealTimes = medication.mealTimes.isNotEmpty
+          ? medication.mealTimes
+          : doseTimes
+                .map((time) => calculateMealTime(time, medication.mealOffset))
+                .toList(growable: false);
+      for (var i = 0; i < mealTimes.length; i++) {
+        final mealTime = _parseTimeOfDay(mealTimes[i]);
+        await _plugin.zonedSchedule(
+          _notificationId(medication.id, 12 + i),
+          medication.languageCode == 'bn' ? 'খাবারের সময়' : 'Meal time',
+          medication.languageCode == 'bn'
+              ? '${medication.medicineName}-এর সঙ্গে মিলিয়ে এখন খাবারের সময়।'
+              : 'Your meal linked to ${medication.medicineName} is scheduled now.',
+          _nextInstanceOf(mealTime),
+          details,
+          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+          matchDateTimeComponents: DateTimeComponents.time,
+        );
+      }
+    }
   }
 
   Future<void> cancelMedication(Medication medication) async {
     await initialize();
-    final doseTimes = medication.doseTimes.isNotEmpty
-        ? medication.doseTimes
-        : <String>[medication.timeOfDay];
-    for (var i = 0; i < doseTimes.length; i++) {
-      await _plugin.cancel(_notificationId(medication.id, i));
-    }
+    await cancelMedicationById(medication.id);
   }
 
   Future<void> cancelMedicationById(
     String medicationId, {
-    int possibleDoseCount = 12,
+    int possibleDoseCount = 24,
   }) async {
     await initialize();
     for (var i = 0; i < possibleDoseCount; i++) {
@@ -123,20 +139,38 @@ class MedicationNotificationService {
     await initialize();
     await _plugin.cancelAll();
     for (final medication in medications) {
-      if (medication.isActive) {
-        await scheduleMedication(medication);
-      }
+      await scheduleMedication(medication);
     }
   }
 
   String _notificationBody(Medication medication, String timeLabel) {
-    final parts = <String>[
-      'Time: $timeLabel',
-      if (medication.dose.isNotEmpty) 'Dose: ${medication.dose}',
-      if (medication.durationDays > 0)
-        'Duration: ${medication.durationDays} days',
-    ];
-    return parts.isEmpty ? 'Time to take your medicine.' : parts.join(' • ');
+    MedicationDose? matchingDose;
+    for (final dose in medication.effectiveDoses) {
+      if (dose.timeOfDay == timeLabel) {
+        matchingDose = dose;
+        break;
+      }
+    }
+    if (medication.languageCode == 'bn') {
+      final dosage = matchingDose == null || matchingDose.dosageValue.isEmpty
+          ? ''
+          : ' • পরিমাণ: ${matchingDose.dosageValue} '
+                '${_banglaDosageUnit(matchingDose.dosageUnit)}';
+      return 'ওষুধ খাওয়ার সময়: $timeLabel$dosage';
+    }
+    final dosage = matchingDose == null || matchingDose.dosageValue.isEmpty
+        ? ''
+        : ' • Dosage: ${matchingDose.dosageValue} '
+              '${matchingDose.dosageUnit}';
+    return 'Medicine time: $timeLabel$dosage';
+  }
+
+  String _banglaDosageUnit(String unit) {
+    return switch (unit) {
+      'ml' => 'মি.লি.',
+      'drop' => 'ফোঁটা',
+      _ => 'টি',
+    };
   }
 
   TimeOfDay _parseTimeOfDay(String value) {

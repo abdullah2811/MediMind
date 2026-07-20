@@ -1,5 +1,43 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+String calculateMealTime(String medicineTime, int mealOffsetMinutes) {
+  final parts = medicineTime.split(':');
+  final hour = parts.isNotEmpty ? int.tryParse(parts[0]) ?? 0 : 0;
+  final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+  final medicineMinutes = hour * 60 + minute;
+  final mealMinutes = (medicineMinutes - mealOffsetMinutes) % (24 * 60);
+  return '${(mealMinutes ~/ 60).toString().padLeft(2, '0')}:'
+      '${(mealMinutes % 60).toString().padLeft(2, '0')}';
+}
+
+class MedicationDose {
+  const MedicationDose({
+    required this.timeOfDay,
+    required this.dosageValue,
+    required this.dosageUnit,
+  });
+
+  final String timeOfDay;
+  final String dosageValue;
+  final String dosageUnit;
+
+  String get summary => '$timeOfDay — $dosageValue $dosageUnit';
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'timeOfDay': timeOfDay,
+    'dosageValue': dosageValue,
+    'dosageUnit': dosageUnit,
+  };
+
+  factory MedicationDose.fromJson(Map<String, dynamic> json) {
+    return MedicationDose(
+      timeOfDay: json['timeOfDay'] as String? ?? '',
+      dosageValue: json['dosageValue'] as String? ?? '',
+      dosageUnit: json['dosageUnit'] as String? ?? '',
+    );
+  }
+}
+
 class Medication {
   const Medication({
     required this.id,
@@ -8,7 +46,14 @@ class Medication {
     required this.durationDays,
     required this.timeOfDay,
     this.doseTimes = const <String>[],
+    this.doses = const <MedicationDose>[],
     required this.mealOffset,
+    this.mealScheduleEnabled = false,
+    this.mealTimes = const <String>[],
+    this.medicineType = 'tablet',
+    this.powerValue,
+    this.powerUnit = 'mg',
+    this.languageCode = 'bn',
     this.formula,
     this.companyName,
     this.imagePath,
@@ -21,6 +66,10 @@ class Medication {
 
   final String id;
   final String medicineName;
+  final String medicineType;
+  final String? powerValue;
+  final String powerUnit;
+  final String languageCode;
   final String? formula;
   final String? companyName;
   final String? imagePath;
@@ -30,14 +79,44 @@ class Medication {
   final int durationDays;
   final String timeOfDay;
   final List<String> doseTimes;
+  final List<MedicationDose> doses;
   final int mealOffset;
+  final bool mealScheduleEnabled;
+  final List<String> mealTimes;
   final String? notes;
   final bool isActive;
   final DateTime updatedAt;
 
+  List<MedicationDose> get effectiveDoses {
+    if (doses.isNotEmpty) {
+      return doses;
+    }
+    final times = doseTimes.isNotEmpty
+        ? doseTimes
+        : <String>[if (timeOfDay.isNotEmpty) timeOfDay];
+    return times
+        .map(
+          (time) => MedicationDose(
+            timeOfDay: time,
+            dosageValue: dose,
+            dosageUnit: '',
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  String get powerLabel {
+    final value = powerValue?.trim() ?? '';
+    return value.isEmpty ? '' : '$value $powerUnit';
+  }
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'id': id,
     'medicineName': medicineName,
+    'medicineType': medicineType,
+    'powerValue': powerValue,
+    'powerUnit': powerUnit,
+    'languageCode': languageCode,
     'formula': formula,
     'companyName': companyName,
     'imagePath': imagePath,
@@ -47,7 +126,10 @@ class Medication {
     'durationDays': durationDays,
     'timeOfDay': timeOfDay,
     'doseTimes': doseTimes,
+    'doses': doses.map((item) => item.toJson()).toList(growable: false),
     'mealOffset': mealOffset,
+    'mealScheduleEnabled': mealScheduleEnabled,
+    'mealTimes': mealTimes,
     'notes': notes,
     'isActive': isActive,
     'updatedAt': updatedAt.toIso8601String(),
@@ -56,20 +138,25 @@ class Medication {
   factory Medication.fromJson(Map<String, dynamic> json) => Medication(
     id: json['id'] as String,
     medicineName: json['medicineName'] as String,
+    medicineType: json['medicineType'] as String? ?? 'tablet',
+    powerValue: json['powerValue'] as String?,
+    powerUnit: json['powerUnit'] as String? ?? 'mg',
+    languageCode: json['languageCode'] as String? ?? 'bn',
     formula: json['formula'] as String?,
     companyName: json['companyName'] as String?,
     imagePath: json['imagePath'] as String?,
     imageBytesBase64: json['imageBytesBase64'] as String?,
     backupImageUrl: json['backupImageUrl'] as String?,
-    dose: (json['dose'] as String?) ?? '',
+    dose: json['dose'] as String? ?? '',
     durationDays: (json['durationDays'] as num?)?.toInt() ?? 0,
-    timeOfDay: json['timeOfDay'] as String,
-    doseTimes: (json['doseTimes'] as List<dynamic>? ?? const <dynamic>[])
-        .map((item) => item as String)
-        .toList(growable: false),
-    mealOffset: (json['mealOffset'] as num).toInt(),
+    timeOfDay: json['timeOfDay'] as String? ?? '',
+    doseTimes: _stringList(json['doseTimes']),
+    doses: _doseList(json['doses']),
+    mealOffset: (json['mealOffset'] as num?)?.toInt() ?? 0,
+    mealScheduleEnabled: json['mealScheduleEnabled'] as bool? ?? false,
+    mealTimes: _stringList(json['mealTimes']),
     notes: json['notes'] as String?,
-    isActive: json['isActive'] as bool? ?? true,
+    isActive: true,
     updatedAt: DateTime.parse(json['updatedAt'] as String),
   );
 
@@ -80,16 +167,23 @@ class Medication {
     'reminderId': id,
     'uid': uid,
     'medicineName': medicineName,
+    'medicineType': medicineType,
+    'powerValue': powerValue,
+    'powerUnit': powerUnit,
+    'languageCode': languageCode,
     'formula': formula,
     'companyName': companyName,
     'dose': dose,
     'durationDays': durationDays,
     'timeOfDay': timeOfDay,
     'doseTimes': doseTimes,
+    'doses': doses.map((item) => item.toJson()).toList(growable: false),
     'mealOffset': mealOffset,
+    'mealScheduleEnabled': mealScheduleEnabled,
+    'mealTimes': mealTimes,
     'imagePath': _cloudImageValue(imageUrlOverride),
     'notes': notes,
-    'isActive': isActive,
+    'isActive': true,
     'updatedAt': Timestamp.fromDate(updatedAt),
   };
 
@@ -100,6 +194,10 @@ class Medication {
     return Medication(
       id: data['reminderId'] as String? ?? snapshot.id,
       medicineName: data['medicineName'] as String? ?? '',
+      medicineType: data['medicineType'] as String? ?? 'tablet',
+      powerValue: data['powerValue'] as String?,
+      powerUnit: data['powerUnit'] as String? ?? 'mg',
+      languageCode: data['languageCode'] as String? ?? 'bn',
       formula: data['formula'] as String?,
       companyName: data['companyName'] as String?,
       imagePath: data['imagePath'] as String?,
@@ -108,12 +206,13 @@ class Medication {
       dose: data['dose'] as String? ?? '',
       durationDays: (data['durationDays'] as num?)?.toInt() ?? 0,
       timeOfDay: data['timeOfDay'] as String? ?? '',
-      doseTimes: (data['doseTimes'] as List<dynamic>? ?? const <dynamic>[])
-          .map((item) => item as String)
-          .toList(growable: false),
+      doseTimes: _stringList(data['doseTimes']),
+      doses: _doseList(data['doses']),
       mealOffset: (data['mealOffset'] as num?)?.toInt() ?? 0,
+      mealScheduleEnabled: data['mealScheduleEnabled'] as bool? ?? false,
+      mealTimes: _stringList(data['mealTimes']),
       notes: data['notes'] as String?,
-      isActive: data['isActive'] as bool? ?? true,
+      isActive: true,
       updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
@@ -121,6 +220,10 @@ class Medication {
   Medication copyWith({
     String? id,
     String? medicineName,
+    String? medicineType,
+    String? powerValue,
+    String? powerUnit,
+    String? languageCode,
     String? formula,
     String? companyName,
     String? imagePath,
@@ -130,7 +233,10 @@ class Medication {
     int? durationDays,
     String? timeOfDay,
     List<String>? doseTimes,
+    List<MedicationDose>? doses,
     int? mealOffset,
+    bool? mealScheduleEnabled,
+    List<String>? mealTimes,
     String? notes,
     bool? isActive,
     DateTime? updatedAt,
@@ -138,6 +244,10 @@ class Medication {
     return Medication(
       id: id ?? this.id,
       medicineName: medicineName ?? this.medicineName,
+      medicineType: medicineType ?? this.medicineType,
+      powerValue: powerValue ?? this.powerValue,
+      powerUnit: powerUnit ?? this.powerUnit,
+      languageCode: languageCode ?? this.languageCode,
       formula: formula ?? this.formula,
       companyName: companyName ?? this.companyName,
       imagePath: imagePath ?? this.imagePath,
@@ -147,9 +257,12 @@ class Medication {
       durationDays: durationDays ?? this.durationDays,
       timeOfDay: timeOfDay ?? this.timeOfDay,
       doseTimes: doseTimes ?? this.doseTimes,
+      doses: doses ?? this.doses,
       mealOffset: mealOffset ?? this.mealOffset,
+      mealScheduleEnabled: mealScheduleEnabled ?? this.mealScheduleEnabled,
+      mealTimes: mealTimes ?? this.mealTimes,
       notes: notes ?? this.notes,
-      isActive: isActive ?? this.isActive,
+      isActive: true,
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
@@ -160,5 +273,18 @@ class Medication {
       return null;
     }
     return candidate.startsWith('http') ? candidate : null;
+  }
+
+  static List<String> _stringList(dynamic value) {
+    return (value as List<dynamic>? ?? const <dynamic>[])
+        .whereType<String>()
+        .toList(growable: false);
+  }
+
+  static List<MedicationDose> _doseList(dynamic value) {
+    return (value as List<dynamic>? ?? const <dynamic>[])
+        .whereType<Map>()
+        .map((item) => MedicationDose.fromJson(Map<String, dynamic>.from(item)))
+        .toList(growable: false);
   }
 }

@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../../core/localization/app_localization.dart';
 import '../../domain/auth_repository.dart';
 import '../../domain/bangladesh_phone_number.dart';
 
@@ -49,7 +50,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
               _normalizedPhoneNumber = normalizedPhoneNumber;
             });
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Verification code sent.')),
+              SnackBar(content: Text(context.tr('verification_sent'))),
             );
           }
         },
@@ -73,15 +74,15 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
   Future<void> _verify() async {
     final verificationId = _verificationId;
     if (verificationId == null || verificationId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request the verification code first.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr('request_code_first'))));
       return;
     }
 
     final smsCode = _codeController.text.trim();
     if (!RegExp(r'^\d{6}$').hasMatch(smsCode)) {
-      _showError(const FormatException('Enter the 6-digit verification code.'));
+      _showError(FormatException(context.tr('enter_six_digit_code')));
       return;
     }
 
@@ -116,29 +117,23 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
 
     final message = switch (error) {
       FirebaseAuthException(:final code) => switch (code) {
-        'invalid-phone-number' => 'Enter a valid Bangladesh mobile number.',
-        'billing-not-enabled' =>
-          'Real verification SMS requires the Firebase Blaze billing plan.',
-        'operation-not-allowed' =>
-          'Phone sign-in is not enabled in Firebase Authentication.',
-        'sms-region-not-allowed' || 'unsupported-country' =>
-          'Firebase is not configured to send SMS to Bangladesh.',
-        'unauthorized-domain' =>
-          'This web address is not authorized in Firebase Authentication.',
-        'invalid-app-credential' || 'captcha-check-failed' =>
-          'Firebase could not verify this browser. Refresh and try again.',
-        'too-many-requests' =>
-          'Too many attempts. Please wait before requesting another code.',
-        'quota-exceeded' =>
-          'The Firebase SMS quota has been exceeded. Try again later.',
-        'invalid-verification-code' => 'The verification code is incorrect.',
-        'session-expired' || 'code-expired' =>
-          'The verification code has expired. Request a new code.',
+        'invalid-phone-number' => context.tr('invalid_phone'),
+        'billing-not-enabled' => context.tr('billing_required'),
+        'operation-not-allowed' => context.tr('phone_disabled'),
+        'sms-region-not-allowed' ||
+        'unsupported-country' => context.tr('region_blocked'),
+        'unauthorized-domain' => context.tr('unauthorized_domain'),
+        'invalid-app-credential' ||
+        'captcha-check-failed' => context.tr('browser_verification_failed'),
+        'too-many-requests' => context.tr('too_many_requests'),
+        'quota-exceeded' => context.tr('quota_exceeded'),
+        'invalid-verification-code' => context.tr('invalid_code'),
+        'session-expired' || 'code-expired' => context.tr('expired_code'),
         _ => error.message ?? 'Authentication failed ($code).',
       },
       FormatException(:final message) => message,
       StateError(:final message) => message,
-      _ => 'Authentication failed. Please try again.',
+      _ => context.tr('auth_failed'),
     };
 
     ScaffoldMessenger.of(
@@ -149,7 +144,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Phone Sign In')),
+      appBar: AppBar(title: Text(context.tr('phone_sign_in'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -157,11 +152,11 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
             key: _formKey,
             child: TextFormField(
               controller: _phoneController,
-              decoration: const InputDecoration(
-                labelText: 'Bangladesh mobile number',
+              decoration: InputDecoration(
+                labelText: context.tr('bangladesh_mobile_number'),
                 hintText: '01712345678',
-                helperText: 'You can enter +8801…, 01…, or 1…',
-                border: OutlineInputBorder(),
+                helperText: context.tr('phone_format_help'),
+                border: const OutlineInputBorder(),
               ),
               keyboardType: TextInputType.phone,
               textInputAction: TextInputAction.done,
@@ -173,8 +168,8 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
                 try {
                   BangladeshPhoneNumber.normalize(value ?? '');
                   return null;
-                } on FormatException catch (error) {
-                  return error.message.toString();
+                } on FormatException {
+                  return context.tr('invalid_phone');
                 }
               },
               onFieldSubmitted: (_) {
@@ -187,15 +182,15 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
           const SizedBox(height: 12),
           FilledButton(
             onPressed: _busy ? null : _requestCode,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Text('Send code'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Text(context.tr('send_code')),
             ),
           ),
           if (_normalizedPhoneNumber case final phoneNumber?) ...[
             const SizedBox(height: 12),
             Text(
-              'Code sent to $phoneNumber',
+              '${context.tr('code_sent_to')} $phoneNumber',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
@@ -203,9 +198,9 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
           const SizedBox(height: 16),
           TextField(
             controller: _codeController,
-            decoration: const InputDecoration(
-              labelText: 'Verification code',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: context.tr('verification_code'),
+              border: const OutlineInputBorder(),
             ),
             keyboardType: TextInputType.number,
             autofillHints: const [AutofillHints.oneTimeCode],
@@ -214,9 +209,9 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
           const SizedBox(height: 12),
           OutlinedButton(
             onPressed: _busy ? null : _verify,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Text('Verify and sign in'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Text(context.tr('verify_and_sign_in')),
             ),
           ),
         ],

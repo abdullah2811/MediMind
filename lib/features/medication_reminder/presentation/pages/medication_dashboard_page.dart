@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/localization/app_localization.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
 import 'add_reminder_page.dart';
@@ -68,7 +69,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
     if (mounted) {
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('Backup complete.')));
+      ).showSnackBar(SnackBar(content: Text(context.tr('backup_complete'))));
       setState(_load);
     }
   }
@@ -89,31 +90,46 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
   }
 
   Medication? _nextMedication(List<Medication> medications) {
-    final active = medications
-        .where((medication) => medication.isActive)
-        .toList();
-    if (active.isEmpty) {
+    if (medications.isEmpty) {
       return null;
     }
 
-    active.sort((left, right) => _nextTime(left).compareTo(_nextTime(right)));
-    return active.first;
+    final scheduled = medications.toList(growable: false)
+      ..sort((left, right) => _nextTime(left).compareTo(_nextTime(right)));
+    return scheduled.first;
   }
 
   DateTime _nextTime(Medication medication) {
-    final parts = medication.timeOfDay.split(':');
-    final hour = int.tryParse(parts.first) ?? 0;
-    final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
-    var next = DateTime(_now.year, _now.month, _now.day, hour, minute);
-    if (next.isBefore(_now)) {
-      next = next.add(const Duration(days: 1));
-    }
-    return next;
+    final times = medication.effectiveDoses
+        .map((dose) => dose.timeOfDay)
+        .where((time) => time.isNotEmpty)
+        .toList(growable: false);
+    final candidates =
+        (times.isEmpty ? <String>[medication.timeOfDay] : times)
+            .map((time) {
+              final parts = time.split(':');
+              final hour = int.tryParse(parts.first) ?? 0;
+              final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+              var next = DateTime(
+                _now.year,
+                _now.month,
+                _now.day,
+                hour,
+                minute,
+              );
+              if (next.isBefore(_now)) {
+                next = next.add(const Duration(days: 1));
+              }
+              return next;
+            })
+            .toList(growable: false)
+          ..sort();
+    return candidates.first;
   }
 
   String _formatCountdown(Medication? medication) {
     if (medication == null) {
-      return 'No active medicines';
+      return context.tr('no_active_medicines');
     }
     final diff = _nextTime(medication).difference(_now);
     final hours = diff.inHours;
@@ -138,9 +154,6 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
           future: _medicationsFuture,
           builder: (context, snapshot) {
             final medications = snapshot.data ?? const <Medication>[];
-            final activeMedications = medications
-                .where((medication) => medication.isActive)
-                .toList();
             final nextMedication = _nextMedication(medications);
 
             return RefreshIndicator(
@@ -159,12 +172,12 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                     ),
                     actions: [
                       IconButton(
-                        tooltip: 'Refresh from cloud',
+                        tooltip: context.tr('refresh_from_cloud'),
                         onPressed: _refresh,
                         icon: const Icon(Icons.sync),
                       ),
                       IconButton(
-                        tooltip: 'Sign out',
+                        tooltip: context.tr('sign_out'),
                         onPressed: widget.onSignOut,
                         icon: const Icon(Icons.logout_outlined),
                       ),
@@ -183,30 +196,22 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                   SliverPadding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     sliver: SliverToBoxAdapter(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _MetricCard(
-                              title: 'Today',
-                              value: '${medications.length}',
-                              icon: Icons.medication_outlined,
-                            ),
+                      child: _Metrics(
+                        cards: [
+                          _MetricCard(
+                            title: context.tr('today'),
+                            value: '${medications.length}',
+                            icon: Icons.medication_outlined,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _MetricCard(
-                              title: 'Active',
-                              value: '${activeMedications.length}',
-                              icon: Icons.notifications_active_outlined,
-                            ),
+                          _MetricCard(
+                            title: context.tr('dashboard_active'),
+                            value: '${medications.length}',
+                            icon: Icons.notifications_active_outlined,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: _MetricCard(
-                              title: 'Next in',
-                              value: _formatCountdown(nextMedication),
-                              icon: Icons.schedule_outlined,
-                            ),
+                          _MetricCard(
+                            title: context.tr('dashboard_next_in'),
+                            value: _formatCountdown(nextMedication),
+                            icon: Icons.schedule_outlined,
                           ),
                         ],
                       ),
@@ -215,38 +220,11 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                     sliver: SliverToBoxAdapter(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Semantics(
-                              button: true,
-                              label: 'Add medicine',
-                              child: FilledButton.icon(
-                                onPressed: _openAddPage,
-                                icon: const Icon(Icons.add),
-                                label: const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 12),
-                                  child: Text('Add Medicine'),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Semantics(
-                              button: true,
-                              label: 'Backup medicine data to Firebase',
-                              child: OutlinedButton.icon(
-                                onPressed: _backup,
-                                icon: const Icon(Icons.cloud_upload_outlined),
-                                label: const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 12),
-                                  child: Text('Backup'),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ],
+                      child: _ActionButtons(
+                        primaryLabel: context.tr('add_medicine'),
+                        secondaryLabel: context.tr('backup'),
+                        onPrimary: _openAddPage,
+                        onSecondary: _backup,
                       ),
                     ),
                   ),
@@ -254,8 +232,9 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                     padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
                     sliver: SliverToBoxAdapter(
                       child: _SectionTitle(
-                        title: 'আজকের ওষুধ',
-                        trailing: '${medications.length} items',
+                        title: context.tr('dashboard_today'),
+                        trailing:
+                            '${medications.length} ${context.tr('dashboard_items')}',
                       ),
                     ),
                   ),
@@ -316,18 +295,38 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 8),
-              _DetailLine(label: 'Dose', value: medication.dose),
               _DetailLine(
-                label: 'Duration',
-                value: '${medication.durationDays} days',
+                label: context.tr('type'),
+                value: context.tr(medication.medicineType),
               ),
-              _DetailLine(label: 'Time', value: medication.timeOfDay),
+              if (medication.powerLabel.isNotEmpty)
+                _DetailLine(
+                  label: context.tr('power'),
+                  value: medication.powerLabel,
+                ),
+              _DetailLine(
+                label: context.tr('dose'),
+                value: _localizedDoseSummary(context, medication),
+              ),
+              _DetailLine(
+                label: context.tr('time'),
+                value: medication.timeOfDay,
+              ),
               if ((medication.formula ?? '').isNotEmpty)
-                _DetailLine(label: 'Formula', value: medication.formula!),
+                _DetailLine(
+                  label: context.tr('formula'),
+                  value: medication.formula!,
+                ),
               if ((medication.companyName ?? '').isNotEmpty)
-                _DetailLine(label: 'Company', value: medication.companyName!),
+                _DetailLine(
+                  label: context.tr('company'),
+                  value: medication.companyName!,
+                ),
               if ((medication.notes ?? '').isNotEmpty)
-                _DetailLine(label: 'Notes', value: medication.notes!),
+                _DetailLine(
+                  label: context.tr('notes'),
+                  value: medication.notes!,
+                ),
               const SizedBox(height: 18),
               Row(
                 children: [
@@ -343,7 +342,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                           setState(_load);
                         }
                       },
-                      child: const Text('Delete'),
+                      child: Text(context.tr('delete')),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -366,7 +365,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                           setState(_load);
                         }
                       },
-                      child: const Text('Edit'),
+                      child: Text(context.tr('edit')),
                     ),
                   ),
                 ],
@@ -392,6 +391,60 @@ class _HeroHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          nextMedication == null
+              ? context.tr('no_active_medicines')
+              : context.tr('next_medicine'),
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          nextMedication?.medicineName ?? context.tr('add_first_reminder'),
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 26,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          nextMedication == null
+              ? context.tr('create_first_reminder_hint')
+              : '${context.tr('due_in')} $countdownText',
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 15,
+            height: 1.35,
+          ),
+        ),
+      ],
+    );
+    final clock = Container(
+      width: 90,
+      height: 90,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white.withValues(alpha: 0.16),
+        border: Border.all(color: Colors.white70, width: 4),
+      ),
+      child: Center(
+        child: Text(
+          nextMedication?.timeOfDay ?? '--:--',
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ),
+    );
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -405,18 +458,18 @@ class _HeroHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               const Icon(Icons.location_on_outlined, color: Colors.white),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Dhaka, Bangladesh',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
+              Text(
+                context.tr('dhaka'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               Text(
@@ -429,69 +482,104 @@ class _HeroHeader extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: Column(
+          LayoutBuilder(
+            builder: (context, constraints) {
+              if (constraints.maxWidth < 430) {
+                return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      nextMedication == null
-                          ? 'No active medicines'
-                          : 'Next medicine',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      nextMedication?.medicineName ?? 'Add a medicine reminder',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      nextMedication == null
-                          ? 'Create your first reminder to start notifications.'
-                          : 'Due in $countdownText',
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 15,
-                        height: 1.35,
-                      ),
-                    ),
+                    details,
+                    const SizedBox(height: 16),
+                    Align(alignment: Alignment.centerRight, child: clock),
                   ],
-                ),
-              ),
-              const SizedBox(width: 14),
-              Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.white.withValues(alpha: 0.16),
-                  border: Border.all(color: Colors.white70, width: 4),
-                ),
-                child: Center(
-                  child: Text(
-                    nextMedication?.timeOfDay ?? '--:--',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+                );
+              }
+              return Row(
+                children: [
+                  Expanded(child: details),
+                  const SizedBox(width: 14),
+                  clock,
+                ],
+              );
+            },
           ),
         ],
       ),
+    );
+  }
+}
+
+class _Metrics extends StatelessWidget {
+  const _Metrics({required this.cards});
+
+  final List<Widget> cards;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = constraints.maxWidth < 500 ? 2 : 3;
+        final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
+        return Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: cards
+              .map((card) => SizedBox(width: width, child: card))
+              .toList(growable: false),
+        );
+      },
+    );
+  }
+}
+
+class _ActionButtons extends StatelessWidget {
+  const _ActionButtons({
+    required this.primaryLabel,
+    required this.secondaryLabel,
+    required this.onPrimary,
+    required this.onSecondary,
+  });
+
+  final String primaryLabel;
+  final String secondaryLabel;
+  final VoidCallback onPrimary;
+  final VoidCallback onSecondary;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final stack = constraints.maxWidth < 430;
+        final primary = FilledButton.icon(
+          onPressed: onPrimary,
+          icon: const Icon(Icons.add),
+          label: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(primaryLabel, textAlign: TextAlign.center),
+          ),
+        );
+        final secondary = OutlinedButton.icon(
+          onPressed: onSecondary,
+          icon: const Icon(Icons.cloud_upload_outlined),
+          label: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(secondaryLabel, textAlign: TextAlign.center),
+          ),
+        );
+        if (stack) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [primary, const SizedBox(height: 10), secondary],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: primary),
+            const SizedBox(width: 12),
+            Expanded(child: secondary),
+          ],
+        );
+      },
     );
   }
 }
@@ -543,8 +631,11 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Wrap(
+      spacing: 12,
+      runSpacing: 4,
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(
           title,
@@ -591,17 +682,20 @@ class _EmptyState extends StatelessWidget {
               child: const Icon(Icons.medication_outlined, size: 36),
             ),
             const SizedBox(height: 14),
-            const Text(
-              'No medicines saved yet',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+            Text(
+              context.tr('no_medicine_saved'),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 8),
-            const Text(
-              'Add a medicine once and the app will remind and back it up automatically.',
+            Text(
+              context.tr('empty_medicine_hint'),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
-            FilledButton(onPressed: onAdd, child: const Text('Add Medicine')),
+            FilledButton(
+              onPressed: onAdd,
+              child: Text(context.tr('add_medicine')),
+            ),
           ],
         ),
       ),
@@ -639,18 +733,12 @@ class _MedicineCard extends StatelessWidget {
                 width: 54,
                 height: 54,
                 decoration: BoxDecoration(
-                  color: medication.isActive
-                      ? const Color(0xFFE8F7F3)
-                      : Colors.grey.shade200,
+                  color: const Color(0xFFE8F7F3),
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: Icon(
-                  medication.isActive
-                      ? Icons.medication_outlined
-                      : Icons.pause_circle_outline,
-                  color: medication.isActive
-                      ? const Color(0xFF0F766E)
-                      : Colors.grey,
+                  Icons.medication_outlined,
+                  color: const Color(0xFF0F766E),
                 ),
               ),
               const SizedBox(width: 14),
@@ -658,33 +746,18 @@ class _MedicineCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            medication.medicineName,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          medication.isActive ? 'Active' : 'Paused',
-                          style: TextStyle(
-                            color: medication.isActive
-                                ? const Color(0xFF0F766E)
-                                : Colors.grey,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      medication.medicineName,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                     const SizedBox(height: 6),
                     Text(
                       medication.dose.isEmpty
-                          ? 'Dose not set'
-                          : medication.dose,
+                          ? context.tr('dose_not_set')
+                          : _localizedDoseSummary(context, medication),
                       style: TextStyle(color: Colors.grey.shade800),
                     ),
                     const SizedBox(height: 6),
@@ -693,13 +766,17 @@ class _MedicineCard extends StatelessWidget {
                       runSpacing: 8,
                       children: [
                         _InfoChip(
-                          label: medication.timeOfDay,
+                          label:
+                              '${context.tr('next')}: '
+                              '${nextTime.hour.toString().padLeft(2, '0')}:'
+                              '${nextTime.minute.toString().padLeft(2, '0')}',
                           icon: Icons.schedule,
                         ),
-                        _InfoChip(
-                          label: '${medication.durationDays} days',
-                          icon: Icons.calendar_month_outlined,
-                        ),
+                        if (medication.powerLabel.isNotEmpty)
+                          _InfoChip(
+                            label: medication.powerLabel,
+                            icon: Icons.science_outlined,
+                          ),
                         if ((medication.companyName ?? '').isNotEmpty)
                           _InfoChip(
                             label: medication.companyName!,
@@ -709,21 +786,6 @@ class _MedicineCard extends StatelessWidget {
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 10),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    '${nextTime.hour.toString().padLeft(2, '0')}:${nextTime.minute.toString().padLeft(2, '0')}',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w800,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text('Next', style: TextStyle(color: Colors.grey.shade600)),
-                ],
               ),
             ],
           ),
@@ -786,4 +848,20 @@ class _DetailLine extends StatelessWidget {
       ),
     );
   }
+}
+
+String _localizedDoseSummary(BuildContext context, Medication medication) {
+  if (medication.doses.isEmpty) {
+    return medication.dose;
+  }
+  return medication.doses
+      .map((dose) {
+        final unit = switch (dose.dosageUnit) {
+          'ml' => context.tr('ml'),
+          'drop' => context.tr('drop_unit'),
+          _ => context.tr('pill'),
+        };
+        return '${dose.timeOfDay} — ${dose.dosageValue} $unit';
+      })
+      .join(' • ');
 }

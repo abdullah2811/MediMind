@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:medimind/app.dart';
@@ -7,11 +8,15 @@ import 'package:medimind/features/medication_reminder/domain/models/medication.d
 import 'package:medimind/features/medication_reminder/domain/repositories/medication_repository.dart';
 
 class FakeMedicationRepository implements MedicationRepository {
+  Medication? lastAdded;
+
   @override
   Future<void> add({
     required String uid,
     required Medication medication,
-  }) async {}
+  }) async {
+    lastAdded = medication;
+  }
 
   @override
   Future<void> delete({required String uid, required String id}) async {}
@@ -55,24 +60,20 @@ class FakeAuthRepository implements AuthRepository {
   }) async {}
 
   @override
-  Future<AppUser> signInWithGoogle() async {
-    return user!;
-  }
+  Future<AppUser> signInWithGoogle() async => user!;
 
   @override
   Future<AppUser> signInWithSmsCode({
     required String verificationId,
     required String smsCode,
-  }) async {
-    return user!;
-  }
+  }) async => user!;
 
   @override
   Future<void> signOut() async {}
 }
 
 void main() {
-  testWidgets('shows only phone and Gmail sign-in options', (
+  testWidgets('shows only phone and Gmail sign-in options in Bangla', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -81,17 +82,16 @@ void main() {
         authRepository: FakeAuthRepository(null),
       ),
     );
-
     await tester.pumpAndSettle();
 
-    expect(find.text('Phone number'), findsOneWidget);
-    expect(find.text('Gmail account'), findsOneWidget);
+    expect(find.text('মোবাইল নম্বর'), findsOneWidget);
+    expect(find.text('জিমেইল অ্যাকাউন্ট'), findsOneWidget);
     expect(find.text('Email address'), findsNothing);
     expect(find.text('Password'), findsNothing);
     expect(find.text('Sign up'), findsNothing);
   });
 
-  testWidgets('renders the dashboard for signed-in users', (
+  testWidgets('renders the Bangla dashboard for signed-in users', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
@@ -102,10 +102,63 @@ void main() {
         ),
       ),
     );
-
     await tester.pumpAndSettle();
 
     expect(find.text('আজকের ওষুধ'), findsOneWidget);
-    expect(find.text('Dhaka, Bangladesh'), findsOneWidget);
+    expect(find.text('ঢাকা, বাংলাদেশ'), findsOneWidget);
+  });
+
+  testWidgets('language can be changed to English from the login screen', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: FakeMedicationRepository(),
+        authRepository: FakeAuthRepository(null),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('English'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Phone number'), findsOneWidget);
+    expect(find.text('Gmail account'), findsOneWidget);
+  });
+
+  testWidgets('medicine form is responsive and uses time plus dosage', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: FakeMedicationRepository(),
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'test-user', displayName: 'Test User'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -600));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ওষুধ যোগ করুন').first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('ওষুধের ধরন'), findsOneWidget);
+    expect(find.text('শক্তির পরিমাণ'), findsOneWidget);
+    expect(find.text('খাওয়ার সময় ও পরিমাণ'), findsOneWidget);
+    expect(find.text('পরিমাণ'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+    expect(find.text('খাবারের সময়ও মনে করিয়ে দিন'), findsOneWidget);
+    await tester.drag(find.byType(ListView), const Offset(0, -500));
+    await tester.pumpAndSettle();
+    expect(find.text('ওষুধের ছবি'), findsOneWidget);
+    expect(find.textContaining('Keep the form simple'), findsNothing);
+    expect(find.text('Amount'), findsNothing);
   });
 }
