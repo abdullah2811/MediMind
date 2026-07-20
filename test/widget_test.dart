@@ -48,28 +48,11 @@ class FakeAuthRepository implements AuthRepository {
   AppUser? get currentUser => user;
 
   @override
-  Future<AppUser> createAccountWithEmailAndPassword({
-    required String email,
-    required String password,
-    String? displayName,
-  }) async {
-    return user!;
-  }
-
-  @override
   Future<void> sendPhoneVerificationCode({
     required String phoneNumber,
     required void Function(String verificationId) onCodeSent,
     required void Function(String errorMessage) onError,
   }) async {}
-
-  @override
-  Future<AppUser> signInWithEmailAndPassword({
-    required String email,
-    required String password,
-  }) async {
-    return user!;
-  }
 
   @override
   Future<AppUser> signInWithGoogle() async {
@@ -89,6 +72,25 @@ class FakeAuthRepository implements AuthRepository {
 }
 
 void main() {
+  testWidgets('shows only phone and Gmail sign-in options', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: FakeMedicationRepository(),
+        authRepository: FakeAuthRepository(null),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    expect(find.text('Phone number'), findsOneWidget);
+    expect(find.text('Gmail account'), findsOneWidget);
+    expect(find.text('Email address'), findsNothing);
+    expect(find.text('Password'), findsNothing);
+    expect(find.text('Sign up'), findsNothing);
+  });
+
   testWidgets('renders the dashboard for signed-in users', (
     WidgetTester tester,
   ) async {

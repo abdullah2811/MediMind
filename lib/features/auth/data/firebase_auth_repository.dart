@@ -1,14 +1,19 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 
 import '../domain/app_user.dart';
 import '../domain/auth_repository.dart';
+import '../domain/bangladesh_phone_number.dart';
 
 class FirebaseAuthRepository implements AuthRepository {
   FirebaseAuthRepository({required FirebaseAuth auth}) : _auth = auth;
 
   final FirebaseAuth _auth;
-  final GoogleSignIn _googleSignIn = GoogleSignIn(scopes: <String>['email']);
+  GoogleSignIn? _googleSignIn;
+
+  GoogleSignIn get _nativeGoogleSignIn =>
+      _googleSignIn ??= GoogleSignIn(scopes: <String>['email']);
 
   @override
   Stream<AppUser?> get authStateChanges => _auth.authStateChanges().map(
@@ -22,38 +27,23 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   @override
-  Future<AppUser> createAccountWithEmailAndPassword({
-    required String email,
-    required String password,
-    String? displayName,
-  }) async {
-    final credential = await _auth.createUserWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-    final user = credential.user;
-    if (user == null) {
-      throw FirebaseAuthException(
-        code: 'user-null',
-        message: 'Authentication succeeded but no user was returned.',
-      );
-    }
-    if (displayName != null && displayName.trim().isNotEmpty) {
-      await user.updateDisplayName(displayName.trim());
-      await user.reload();
-    }
-    final refreshedUser = _auth.currentUser ?? user;
-    return _mapUser(refreshedUser);
-  }
-
-  @override
   Future<void> sendPhoneVerificationCode({
     required String phoneNumber,
     required void Function(String verificationId) onCodeSent,
     required void Function(String errorMessage) onError,
   }) async {
+    final normalizedPhoneNumber = BangladeshPhoneNumber.normalize(phoneNumber);
+
+    if (kIsWeb) {
+      // Firebase manages the required web reCAPTCHA verifier. With no custom
+      // verifier supplied, it uses the default invisible flow.
+      final result = await _auth.signInWithPhoneNumber(normalizedPhoneNumber);
+      onCodeSent(result.verificationId);
+      return;
+    }
+
     await _auth.verifyPhoneNumber(
-      phoneNumber: phoneNumber,
+      phoneNumber: normalizedPhoneNumber,
       verificationCompleted: (credential) async {
         await _auth.signInWithCredential(credential);
       },
@@ -68,27 +58,13 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   @override
-  Future<AppUser> signInWithEmailAndPassword({
-    required String email,
-    required String password,
-  }) async {
-    final credential = await _auth.signInWithEmailAndPassword(
-      email: email,
-      password: password,
-    );
-    final user = credential.user;
-    if (user == null) {
-      throw FirebaseAuthException(
-        code: 'user-null',
-        message: 'Authentication succeeded but no user was returned.',
-      );
-    }
-    return _mapUser(user);
-  }
-
-  @override
   Future<AppUser> signInWithGoogle() async {
-    final googleUser = await _googleSignIn.signIn();
+    if (kIsWeb) {
+      final credential = await _auth.signInWithPopup(GoogleAuthProvider());
+      return _mapCredentialUser(credential);
+    }
+
+    final googleUser = await _nativeGoogleSignIn.signIn();
     if (googleUser == null) {
       throw FirebaseAuthException(
         code: 'canceled',
@@ -101,14 +77,7 @@ class FirebaseAuthRepository implements AuthRepository {
       idToken: googleAuth.idToken,
     );
     final userCredential = await _auth.signInWithCredential(credential);
-    final user = userCredential.user;
-    if (user == null) {
-      throw FirebaseAuthException(
-        code: 'user-null',
-        message: 'Authentication succeeded but no user was returned.',
-      );
-    }
-    return _mapUser(user);
+    return _mapCredentialUser(userCredential);
   }
 
   @override
@@ -121,7 +90,19 @@ class FirebaseAuthRepository implements AuthRepository {
       smsCode: smsCode,
     );
     final userCredential = await _auth.signInWithCredential(credential);
-    final user = userCredential.user;
+    return _mapCredentialUser(userCredential);
+  }
+
+  @override
+  Future<void> signOut() async {
+    if (!kIsWeb) {
+      await _googleSignIn?.signOut();
+    }
+    await _auth.signOut();
+  }
+
+  AppUser _mapCredentialUser(UserCredential credential) {
+    final user = credential.user;
     if (user == null) {
       throw FirebaseAuthException(
         code: 'user-null',
@@ -129,12 +110,6 @@ class FirebaseAuthRepository implements AuthRepository {
       );
     }
     return _mapUser(user);
-  }
-
-  @override
-  Future<void> signOut() async {
-    await _googleSignIn.signOut();
-    await _auth.signOut();
   }
 
   AppUser _mapUser(User user) {

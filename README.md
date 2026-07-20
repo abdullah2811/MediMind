@@ -1,16 +1,47 @@
-# medimind
+# MediMind
 
-A Flutter App.
+A Flutter medication reminder app using Firebase Authentication, Firestore,
+and Storage.
 
-## Getting Started
+## Firebase authentication setup
 
-This project is a starting point for a Flutter application.
+Enable the Phone and Google providers in the Firebase Console. For real SMS,
+enable Bangladesh in the SMS region policy and use an eligible billing plan.
+Production web domains must be listed under Authentication > Settings >
+Authorized domains.
 
-A few resources to get you started if this is your first Flutter project:
+### Debug with Firebase test phone numbers
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+In Firebase Console > Authentication > Sign-in method > Phone, add a fictional
+test phone number and a fixed six-digit code. Then run:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```powershell
+flutter pub get
+flutter run -d chrome --dart-define=FIREBASE_AUTH_TESTING=true
+```
+
+This flag disables app verification only when Flutter is running a debug build.
+Only Firebase-configured test phone numbers work in this mode.
+
+### Debug with real Firebase verification
+
+Omit the test flag:
+
+```powershell
+flutter run -d chrome
+```
+
+Real web phone verification uses Firebase reCAPTCHA and should be tested from a
+deployed, authorized HTTPS domain. Repeated failed requests may be throttled by
+Firebase.
+
+### Release
+
+Build without the test flag:
+
+```powershell
+flutter build web --release
+```
+
+The app also checks `kDebugMode`, so app verification remains enabled in
+release builds even if `FIREBASE_AUTH_TESTING=true` is accidentally supplied.

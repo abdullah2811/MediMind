@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../domain/auth_repository.dart';
-import 'google_sign_in_page.dart';
 import 'phone_sign_in_page.dart';
-import 'sign_up_page.dart';
 
 class SignInPage extends StatefulWidget {
   const SignInPage({super.key, required this.authRepository});
@@ -15,21 +13,12 @@ class SignInPage extends StatefulWidget {
 }
 
 class _SignInPageState extends State<SignInPage> {
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _busy = false;
+  bool _googleBusy = false;
 
-  @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _runAction(Future<void> Function() action) async {
-    setState(() => _busy = true);
+  Future<void> _signInWithGoogle() async {
+    setState(() => _googleBusy = true);
     try {
-      await action();
+      await widget.authRepository.signInWithGoogle();
     } on Object catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -38,40 +27,15 @@ class _SignInPageState extends State<SignInPage> {
       }
     } finally {
       if (mounted) {
-        setState(() => _busy = false);
+        setState(() => _googleBusy = false);
       }
     }
-  }
-
-  Future<void> _signInEmail() async {
-    await _runAction(() async {
-      await widget.authRepository.signInWithEmailAndPassword(
-        email: _emailController.text.trim(),
-        password: _passwordController.text,
-      );
-    });
-  }
-
-  void _openSignUp() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => SignUpPage(authRepository: widget.authRepository),
-      ),
-    );
   }
 
   void _openPhoneSignIn() {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => PhoneSignInPage(authRepository: widget.authRepository),
-      ),
-    );
-  }
-
-  void _openGoogleSignIn() {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => GoogleSignInPage(authRepository: widget.authRepository),
       ),
     );
   }
@@ -104,66 +68,10 @@ class _SignInPageState extends State<SignInPage> {
                   style: theme.textTheme.bodyLarge,
                 ),
                 const SizedBox(height: 20),
-                Card(
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    side: BorderSide(color: Colors.grey.shade200),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'Sign in',
-                          style: theme.textTheme.titleLarge?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        const SizedBox(height: 14),
-                        TextField(
-                          controller: _emailController,
-                          decoration: const InputDecoration(
-                            labelText: 'Email address',
-                            border: OutlineInputBorder(),
-                          ),
-                          keyboardType: TextInputType.emailAddress,
-                        ),
-                        const SizedBox(height: 12),
-                        TextField(
-                          controller: _passwordController,
-                          decoration: const InputDecoration(
-                            labelText: 'Password',
-                            border: OutlineInputBorder(),
-                          ),
-                          obscureText: true,
-                        ),
-                        const SizedBox(height: 16),
-                        Semantics(
-                          button: true,
-                          label: 'Sign in with email and password',
-                          child: FilledButton(
-                            onPressed: _busy ? null : _signInEmail,
-                            child: const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 14),
-                              child: Text('Sign in'),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextButton(
-                          onPressed: _busy ? null : _openSignUp,
-                          child: const Text('Sign up'),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
                 Text(
-                  'Other sign-in options',
-                  style: theme.textTheme.titleMedium?.copyWith(
+                  'Choose how to sign in',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
                 ),
@@ -171,15 +79,16 @@ class _SignInPageState extends State<SignInPage> {
                 _MethodTile(
                   icon: Icons.phone_android,
                   title: 'Phone number',
-                  subtitle: 'One-time code for quick access',
+                  subtitle: 'Use any common Bangladesh number format',
                   onTap: _openPhoneSignIn,
                 ),
                 const SizedBox(height: 10),
                 _MethodTile(
                   icon: Icons.account_circle_outlined,
-                  title: 'Google account',
-                  subtitle: 'Continue with your Google account',
-                  onTap: _openGoogleSignIn,
+                  title: 'Gmail account',
+                  subtitle: 'Continue securely with Google',
+                  onTap: _googleBusy ? null : _signInWithGoogle,
+                  loading: _googleBusy,
                 ),
               ],
             ),
@@ -196,12 +105,14 @@ class _MethodTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.onTap,
+    this.loading = false,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
+  final bool loading;
 
   @override
   Widget build(BuildContext context) {
@@ -219,7 +130,12 @@ class _MethodTile extends StatelessWidget {
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
         subtitle: Text(subtitle),
-        trailing: const Icon(Icons.chevron_right),
+        trailing: loading
+            ? const SizedBox.square(
+                dimension: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Icon(Icons.chevron_right),
       ),
     );
   }

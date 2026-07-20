@@ -5,6 +5,7 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import 'core/config/firebase_auth_environment.dart';
 import 'firebase_options.dart';
 import 'features/auth/data/firebase_auth_repository.dart';
 import 'features/auth/domain/auth_repository.dart';
@@ -82,6 +83,7 @@ class MediMindApp extends StatelessWidget {
 Future<void> bootstrapApp() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  await configureFirebaseAuthForEnvironment(FirebaseAuth.instance);
   await Hive.initFlutter();
   await MedicationNotificationService().initialize();
   runApp(const MediMindApp());
