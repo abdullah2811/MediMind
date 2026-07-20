@@ -27,7 +27,9 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required Medication medication,
   }) async {
     await _localDataSource.save(medication);
-    await _notificationService.scheduleMedication(medication);
+    if (medication.isActive) {
+      await _notificationService.scheduleMedication(medication);
+    }
     _syncService.queuePush(
       uid: uid,
       medication: medication,
@@ -39,7 +41,11 @@ class MedicationRepositoryImpl implements MedicationRepository {
   Future<void> delete({required String uid, required String id}) async {
     final medication = await _localDataSource.getById(id);
     await _localDataSource.delete(id);
-    await _notificationService.cancelMedication(id);
+    if (medication != null) {
+      await _notificationService.cancelMedication(medication);
+    } else {
+      await _notificationService.cancelMedicationById(id);
+    }
     if (medication != null) {
       _syncService.queuePush(
         uid: uid,
@@ -78,8 +84,16 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required String uid,
     required Medication medication,
   }) async {
+    final previousMedication = await _localDataSource.getById(medication.id);
+    if (previousMedication != null) {
+      await _notificationService.cancelMedication(previousMedication);
+    } else {
+      await _notificationService.cancelMedicationById(medication.id);
+    }
     await _localDataSource.save(medication);
-    await _notificationService.scheduleMedication(medication);
+    if (medication.isActive) {
+      await _notificationService.scheduleMedication(medication);
+    }
     _syncService.queuePush(
       uid: uid,
       medication: medication,

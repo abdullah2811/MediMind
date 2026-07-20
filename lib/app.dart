@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'core/config/firebase_auth_environment.dart';
+import 'core/localization/app_localization.dart';
 import 'firebase_options.dart';
 import 'features/auth/data/firebase_auth_repository.dart';
 import 'features/auth/domain/auth_repository.dart';
@@ -17,40 +18,75 @@ import 'features/medication_reminder/data/services/medication_notification_servi
 import 'features/medication_reminder/data/services/medication_sync_service.dart';
 import 'features/medication_reminder/domain/repositories/medication_repository.dart';
 
-class MediMindApp extends StatelessWidget {
+class MediMindApp extends StatefulWidget {
   const MediMindApp({super.key, this.repository, this.authRepository});
 
   final MedicationRepository? repository;
   final AuthRepository? authRepository;
 
   @override
+  State<MediMindApp> createState() => _MediMindAppState();
+}
+
+class _MediMindAppState extends State<MediMindApp> {
+  late final AppLanguageController _languageController;
+
+  @override
+  void initState() {
+    super.initState();
+    _languageController = AppLanguageController();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final notificationService = MedicationNotificationService();
     final medicationRepository =
-        repository ?? _buildDefaultRepository(notificationService);
+        widget.repository ?? _buildDefaultRepository(notificationService);
     final authenticationRepository =
-        authRepository ?? _buildDefaultAuthRepository();
+        widget.authRepository ?? _buildDefaultAuthRepository();
 
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'MediMind',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF1C5D99),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-        textTheme: const TextTheme(
-          headlineMedium: TextStyle(fontSize: 26, fontWeight: FontWeight.w700),
-          titleLarge: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
-          bodyLarge: TextStyle(fontSize: 18),
-        ),
-      ),
-      home: AuthGate(
-        authRepository: authenticationRepository,
-        medicationRepository: medicationRepository,
+    return AppLanguageScope(
+      controller: _languageController,
+      child: ValueListenableBuilder<Locale>(
+        valueListenable: _languageController,
+        builder: (context, locale, _) {
+          return MaterialApp(
+            debugShowCheckedModeBanner: false,
+            title: context.tr('app_name'),
+            locale: locale,
+            supportedLocales: const [Locale('en'), Locale('bn')],
+            theme: ThemeData(
+              colorScheme: ColorScheme.fromSeed(
+                seedColor: const Color(0xFF1C5D99),
+                brightness: Brightness.light,
+              ),
+              useMaterial3: true,
+              textTheme: const TextTheme(
+                headlineMedium: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w700,
+                ),
+                titleLarge: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+                bodyLarge: TextStyle(fontSize: 18),
+              ),
+            ),
+            home: AuthGate(
+              authRepository: authenticationRepository,
+              medicationRepository: medicationRepository,
+            ),
+          );
+        },
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _languageController.dispose();
+    super.dispose();
   }
 
   AuthRepository _buildDefaultAuthRepository() {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/localization/app_localization.dart';
 import '../../domain/auth_repository.dart';
 import 'phone_sign_in_page.dart';
 
@@ -53,23 +54,30 @@ class _SignInPageState extends State<SignInPage> {
               padding: const EdgeInsets.all(16),
               shrinkWrap: true,
               children: [
-                Text(
-                  'MediMind',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFF153E75),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        context.tr('app_name'),
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.headlineMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFF153E75),
+                        ),
+                      ),
+                    ),
+                    const LanguageToggleButton(),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'সহজ, পরিষ্কার, ওষুধ মনে রাখার জন্য তৈরি।',
+                  context.tr('tagline'),
                   textAlign: TextAlign.center,
                   style: theme.textTheme.bodyLarge,
                 ),
                 const SizedBox(height: 20),
                 Text(
-                  'Choose how to sign in',
+                  context.tr('choose_sign_in'),
                   textAlign: TextAlign.center,
                   style: theme.textTheme.titleLarge?.copyWith(
                     fontWeight: FontWeight.w800,
@@ -78,15 +86,15 @@ class _SignInPageState extends State<SignInPage> {
                 const SizedBox(height: 10),
                 _MethodTile(
                   icon: Icons.phone_android,
-                  title: 'Phone number',
-                  subtitle: 'Use any common Bangladesh number format',
+                  title: context.tr('phone_number'),
+                  subtitle: context.tr('phone_sign_in_subtitle'),
                   onTap: _openPhoneSignIn,
                 ),
                 const SizedBox(height: 10),
                 _MethodTile(
                   icon: Icons.account_circle_outlined,
-                  title: 'Gmail account',
-                  subtitle: 'Continue securely with Google',
+                  title: context.tr('google_account'),
+                  subtitle: context.tr('google_sign_in_subtitle'),
                   onTap: _googleBusy ? null : _signInWithGoogle,
                   loading: _googleBusy,
                 ),

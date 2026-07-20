@@ -7,6 +7,7 @@ class Medication {
     required this.dose,
     required this.durationDays,
     required this.timeOfDay,
+    this.doseTimes = const <String>[],
     required this.mealOffset,
     this.formula,
     this.companyName,
@@ -28,6 +29,7 @@ class Medication {
   final String dose;
   final int durationDays;
   final String timeOfDay;
+  final List<String> doseTimes;
   final int mealOffset;
   final String? notes;
   final bool isActive;
@@ -44,6 +46,7 @@ class Medication {
     'dose': dose,
     'durationDays': durationDays,
     'timeOfDay': timeOfDay,
+    'doseTimes': doseTimes,
     'mealOffset': mealOffset,
     'notes': notes,
     'isActive': isActive,
@@ -61,6 +64,9 @@ class Medication {
     dose: (json['dose'] as String?) ?? '',
     durationDays: (json['durationDays'] as num?)?.toInt() ?? 0,
     timeOfDay: json['timeOfDay'] as String,
+    doseTimes: (json['doseTimes'] as List<dynamic>? ?? const <dynamic>[])
+        .map((item) => item as String)
+        .toList(growable: false),
     mealOffset: (json['mealOffset'] as num).toInt(),
     notes: json['notes'] as String?,
     isActive: json['isActive'] as bool? ?? true,
@@ -79,6 +85,7 @@ class Medication {
     'dose': dose,
     'durationDays': durationDays,
     'timeOfDay': timeOfDay,
+    'doseTimes': doseTimes,
     'mealOffset': mealOffset,
     'imagePath': _cloudImageValue(imageUrlOverride),
     'notes': notes,
@@ -101,6 +108,9 @@ class Medication {
       dose: data['dose'] as String? ?? '',
       durationDays: (data['durationDays'] as num?)?.toInt() ?? 0,
       timeOfDay: data['timeOfDay'] as String? ?? '',
+      doseTimes: (data['doseTimes'] as List<dynamic>? ?? const <dynamic>[])
+          .map((item) => item as String)
+          .toList(growable: false),
       mealOffset: (data['mealOffset'] as num?)?.toInt() ?? 0,
       notes: data['notes'] as String?,
       isActive: data['isActive'] as bool? ?? true,
@@ -119,6 +129,7 @@ class Medication {
     String? dose,
     int? durationDays,
     String? timeOfDay,
+    List<String>? doseTimes,
     int? mealOffset,
     String? notes,
     bool? isActive,
@@ -135,6 +146,7 @@ class Medication {
       dose: dose ?? this.dose,
       durationDays: durationDays ?? this.durationDays,
       timeOfDay: timeOfDay ?? this.timeOfDay,
+      doseTimes: doseTimes ?? this.doseTimes,
       mealOffset: mealOffset ?? this.mealOffset,
       notes: notes ?? this.notes,
       isActive: isActive ?? this.isActive,
