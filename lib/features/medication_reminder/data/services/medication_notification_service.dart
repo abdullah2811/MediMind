@@ -53,18 +53,26 @@ class MedicationNotificationService {
 
   Future<void> scheduleMedication(Medication medication) async {
     await initialize();
-    final reminderTime = _parseTimeOfDay(medication.timeOfDay);
-    final notificationId = _notificationId(medication.id);
-    final nextTrigger = _nextInstanceOf(reminderTime);
+    await cancelMedicationById(medication.id);
+    if (!medication.isActive) {
+      return;
+    }
+
+    final doseTimes = medication.doseTimes.isNotEmpty
+        ? medication.doseTimes
+        : <String>[medication.timeOfDay];
 
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
         'medimind_reminders',
         'Medicine reminders',
         channelDescription: 'Medicine reminder alerts for MediMind',
+        category: AndroidNotificationCategory.alarm,
         importance: Importance.max,
         priority: Priority.high,
         playSound: true,
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+        fullScreenIntent: true,
       ),
       iOS: const DarwinNotificationDetails(
         presentAlert: true,
@@ -72,22 +80,43 @@ class MedicationNotificationService {
       ),
     );
 
-    await _plugin.zonedSchedule(
-      notificationId,
-      medication.medicineName,
-      _notificationBody(medication),
-      nextTrigger,
-      details,
-      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
-      matchDateTimeComponents: DateTimeComponents.time,
-    );
+    for (var i = 0; i < doseTimes.length; i++) {
+      final reminderTime = _parseTimeOfDay(doseTimes[i]);
+      final notificationId = _notificationId(medication.id, i);
+      final nextTrigger = _nextInstanceOf(reminderTime);
+
+      await _plugin.zonedSchedule(
+        notificationId,
+        medication.medicineName,
+        _notificationBody(medication, doseTimes[i]),
+        nextTrigger,
+        details,
+        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        matchDateTimeComponents: DateTimeComponents.time,
+      );
+    }
   }
 
-  Future<void> cancelMedication(String medicationId) async {
+  Future<void> cancelMedication(Medication medication) async {
     await initialize();
-    await _plugin.cancel(_notificationId(medicationId));
+    final doseTimes = medication.doseTimes.isNotEmpty
+        ? medication.doseTimes
+        : <String>[medication.timeOfDay];
+    for (var i = 0; i < doseTimes.length; i++) {
+      await _plugin.cancel(_notificationId(medication.id, i));
+    }
+  }
+
+  Future<void> cancelMedicationById(
+    String medicationId, {
+    int possibleDoseCount = 12,
+  }) async {
+    await initialize();
+    for (var i = 0; i < possibleDoseCount; i++) {
+      await _plugin.cancel(_notificationId(medicationId, i));
+    }
   }
 
   Future<void> rescheduleAll(List<Medication> medications) async {
@@ -100,8 +129,9 @@ class MedicationNotificationService {
     }
   }
 
-  String _notificationBody(Medication medication) {
+  String _notificationBody(Medication medication, String timeLabel) {
     final parts = <String>[
+      'Time: $timeLabel',
       if (medication.dose.isNotEmpty) 'Dose: ${medication.dose}',
       if (medication.durationDays > 0)
         'Duration: ${medication.durationDays} days',
@@ -135,7 +165,7 @@ class MedicationNotificationService {
     return scheduled;
   }
 
-  int _notificationId(String medicationId) {
-    return medicationId.hashCode & 0x7fffffff;
+  int _notificationId(String medicationId, int doseIndex) {
+    return ('${medicationId}_$doseIndex').hashCode & 0x7fffffff;
   }
 }
