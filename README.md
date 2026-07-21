@@ -13,13 +13,19 @@ The application currently targets Android, iOS, and the web.
 - Flexible Bangladesh phone-number entry.
 - Automatic conversion of valid numbers to Firebase-compatible E.164 format.
 - Bengali and English interfaces, with Bengali selected by default.
-- Medicine type selection: tablet, capsule, syrup, or drop.
+- Medicine type selection: tablet, capsule, syrup, drop, or insulin.
 - Medicine strength entry with units such as mg, g, and mcg.
 - Multiple daily medicine times, each with its own dosage.
 - Dosage units derived automatically from the medicine type.
 - Optional meal reminders calculated from the medicine reminder time.
+- Custom before-meal and after-meal offsets, defaulting to 20 minutes.
+- Medicine and meal taken/not-taken tracking, including the actual time and
+  whether a late dose was taken with food.
 - Optional medicine photos.
-- Daily local notifications in the language used when the medicine was saved.
+- High-priority daily local notifications in the language used when the
+  medicine was saved.
+- Collision-safe reminder planning that merges events scheduled for the same
+  clock minute.
 - A dashboard showing the next medicine and a dynamic 24-hour day-cycle arc.
 - Local-first storage using Hive.
 - Automatic Firebase backup after medicines are added or updated.
@@ -274,9 +280,12 @@ manifest:
 <uses-permission android:name="android.permission.INTERNET" />
 ```
 
-The main manifest already declares notification and exact-alarm permissions.
+The main manifest declares notification, vibration, exact-alarm, reboot, and
+full-screen-intent permissions. It also registers the scheduled-notification
+and reboot receivers required by `flutter_local_notifications`. The app asks
+for notification, exact-alarm, and full-screen-intent access where supported.
 Review current Google Play policy requirements before publishing an application
-that requests exact-alarm access.
+that requests exact alarms or full-screen intents.
 
 ### iOS
 
@@ -322,7 +331,7 @@ that the data is saved locally and will be retried later.
 Each medicine can include:
 
 - Name.
-- Type: tablet, capsule, syrup, or drop.
+- Type: tablet, capsule, syrup, drop, or insulin.
 - Strength value and unit.
 - Optional generic name or formula.
 - Optional company name.
@@ -340,6 +349,7 @@ Dosage units are selected automatically:
 | Capsule | Pill |
 | Syrup | Millilitre |
 | Drop | Drop |
+| Insulin | Units |
 
 Medicine reminders are always enabled. The optional meal reminder can be
 enabled or disabled separately.
@@ -348,13 +358,16 @@ Meal times are calculated from the medicine time:
 
 | Selection | Calculation example |
 | --- | --- |
-| 30 minutes before a meal | Medicine at 09:00, meal at 09:30 |
+| 20 minutes before a meal | Medicine at 09:00, meal at 09:20 |
 | With the meal | Medicine at 09:00, meal at 09:00 |
-| 30 minutes after a meal | Medicine at 09:00, meal at 08:30 |
+| 20 minutes after a meal | Medicine at 09:00, meal at 08:40 |
 
 Notifications use the `Asia/Dhaka` time zone. Android users may be asked to
-allow notifications and exact alarms. iOS users may be asked to allow alert,
-badge, and sound permissions.
+allow notifications, exact alarms, and full-screen alarms. Scheduled Android
+notifications are restored after a device reboot. iOS notifications use the
+Time Sensitive interruption level and may ask users to allow alert, badge, and
+sound permissions. Clock controls and displayed reminder times use a 12-hour
+format.
 
 ## Localization and design
 

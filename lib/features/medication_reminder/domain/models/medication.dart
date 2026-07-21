@@ -38,6 +38,56 @@ class MedicationDose {
   }
 }
 
+class MedicationCheckIn {
+  const MedicationCheckIn({
+    required this.dateKey,
+    required this.doseTime,
+    this.medicineStatus,
+    this.mealStatus,
+    this.medicineTakenAt,
+    this.mealTakenAt,
+    this.takenWithMeal = false,
+  });
+
+  final String dateKey;
+  final String doseTime;
+  final String? medicineStatus;
+  final String? mealStatus;
+  final DateTime? medicineTakenAt;
+  final DateTime? mealTakenAt;
+  final bool takenWithMeal;
+
+  String get key => '$dateKey|$doseTime';
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+    'dateKey': dateKey,
+    'doseTime': doseTime,
+    'medicineStatus': medicineStatus,
+    'mealStatus': mealStatus,
+    'medicineTakenAt': medicineTakenAt?.toIso8601String(),
+    'mealTakenAt': mealTakenAt?.toIso8601String(),
+    'takenWithMeal': takenWithMeal,
+  };
+
+  factory MedicationCheckIn.fromJson(Map<String, dynamic> json) {
+    return MedicationCheckIn(
+      dateKey: json['dateKey'] as String? ?? '',
+      doseTime: json['doseTime'] as String? ?? '',
+      medicineStatus: json['medicineStatus'] as String?,
+      mealStatus: json['mealStatus'] as String?,
+      medicineTakenAt: _dateTimeOrNull(json['medicineTakenAt']),
+      mealTakenAt: _dateTimeOrNull(json['mealTakenAt']),
+      takenWithMeal: json['takenWithMeal'] as bool? ?? false,
+    );
+  }
+}
+
+String medicationDateKey(DateTime date) {
+  return '${date.year.toString().padLeft(4, '0')}-'
+      '${date.month.toString().padLeft(2, '0')}-'
+      '${date.day.toString().padLeft(2, '0')}';
+}
+
 class Medication {
   const Medication({
     required this.id,
@@ -50,6 +100,7 @@ class Medication {
     required this.mealOffset,
     this.mealScheduleEnabled = false,
     this.mealTimes = const <String>[],
+    this.checkIns = const <MedicationCheckIn>[],
     this.medicineType = 'tablet',
     this.powerValue,
     this.powerUnit = 'mg',
@@ -83,6 +134,7 @@ class Medication {
   final int mealOffset;
   final bool mealScheduleEnabled;
   final List<String> mealTimes;
+  final List<MedicationCheckIn> checkIns;
   final String? notes;
   final bool isActive;
   final DateTime updatedAt;
@@ -110,6 +162,16 @@ class Medication {
     return value.isEmpty ? '' : '$value $powerUnit';
   }
 
+  MedicationCheckIn? checkInFor(DateTime date, String doseTime) {
+    final key = '${medicationDateKey(date)}|$doseTime';
+    for (final checkIn in checkIns) {
+      if (checkIn.key == key) {
+        return checkIn;
+      }
+    }
+    return null;
+  }
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'id': id,
     'medicineName': medicineName,
@@ -130,6 +192,7 @@ class Medication {
     'mealOffset': mealOffset,
     'mealScheduleEnabled': mealScheduleEnabled,
     'mealTimes': mealTimes,
+    'checkIns': checkIns.map((item) => item.toJson()).toList(growable: false),
     'notes': notes,
     'isActive': isActive,
     'updatedAt': updatedAt.toIso8601String(),
@@ -155,6 +218,7 @@ class Medication {
     mealOffset: (json['mealOffset'] as num?)?.toInt() ?? 0,
     mealScheduleEnabled: json['mealScheduleEnabled'] as bool? ?? false,
     mealTimes: _stringList(json['mealTimes']),
+    checkIns: _checkInList(json['checkIns']),
     notes: json['notes'] as String?,
     isActive: true,
     updatedAt: DateTime.parse(json['updatedAt'] as String),
@@ -181,6 +245,7 @@ class Medication {
     'mealOffset': mealOffset,
     'mealScheduleEnabled': mealScheduleEnabled,
     'mealTimes': mealTimes,
+    'checkIns': checkIns.map((item) => item.toJson()).toList(growable: false),
     'imagePath': _cloudImageValue(imageUrlOverride),
     'notes': notes,
     'isActive': true,
@@ -211,6 +276,7 @@ class Medication {
       mealOffset: (data['mealOffset'] as num?)?.toInt() ?? 0,
       mealScheduleEnabled: data['mealScheduleEnabled'] as bool? ?? false,
       mealTimes: _stringList(data['mealTimes']),
+      checkIns: _checkInList(data['checkIns']),
       notes: data['notes'] as String?,
       isActive: true,
       updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -237,6 +303,7 @@ class Medication {
     int? mealOffset,
     bool? mealScheduleEnabled,
     List<String>? mealTimes,
+    List<MedicationCheckIn>? checkIns,
     String? notes,
     bool? isActive,
     DateTime? updatedAt,
@@ -261,6 +328,7 @@ class Medication {
       mealOffset: mealOffset ?? this.mealOffset,
       mealScheduleEnabled: mealScheduleEnabled ?? this.mealScheduleEnabled,
       mealTimes: mealTimes ?? this.mealTimes,
+      checkIns: checkIns ?? this.checkIns,
       notes: notes ?? this.notes,
       isActive: true,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -287,4 +355,17 @@ class Medication {
         .map((item) => MedicationDose.fromJson(Map<String, dynamic>.from(item)))
         .toList(growable: false);
   }
+
+  static List<MedicationCheckIn> _checkInList(dynamic value) {
+    return (value as List<dynamic>? ?? const <dynamic>[])
+        .whereType<Map>()
+        .map(
+          (item) => MedicationCheckIn.fromJson(Map<String, dynamic>.from(item)),
+        )
+        .toList(growable: false);
+  }
+}
+
+DateTime? _dateTimeOrNull(dynamic value) {
+  return value is String ? DateTime.tryParse(value) : null;
 }

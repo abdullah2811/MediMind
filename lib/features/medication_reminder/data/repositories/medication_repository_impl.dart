@@ -34,9 +34,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required Medication medication,
   }) async {
     await _localDataSource.save(medication);
-    if (medication.isActive) {
-      await _notificationService.scheduleMedication(medication);
-    }
+    await _rescheduleLocalNotifications();
     _syncService.queueBackup(uid: uid);
   }
 
@@ -44,11 +42,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
   Future<void> delete({required String uid, required String id}) async {
     final medication = await _localDataSource.getById(id);
     await _localDataSource.delete(id);
-    if (medication != null) {
-      await _notificationService.cancelMedication(medication);
-    } else {
-      await _notificationService.cancelMedicationById(id);
-    }
+    await _rescheduleLocalNotifications();
     if (medication != null) {
       _syncService.queuePush(
         uid: uid,
@@ -78,22 +72,15 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required String uid,
     required Medication medication,
   }) async {
-    final previousMedication = await _localDataSource.getById(medication.id);
-    if (previousMedication != null) {
-      await _notificationService.cancelMedication(previousMedication);
-    } else {
-      await _notificationService.cancelMedicationById(medication.id);
-    }
     await _localDataSource.save(medication);
-    if (medication.isActive) {
-      await _notificationService.scheduleMedication(medication);
-    }
+    await _rescheduleLocalNotifications();
     _syncService.queueBackup(uid: uid);
   }
 
   @override
   Future<void> startAutoSync({required String uid}) async {
     await stopAutoSync();
+    await _rescheduleLocalNotifications();
     _autoSyncUid = uid;
     _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
       results,
@@ -132,5 +119,10 @@ class MedicationRepositoryImpl implements MedicationRepository {
 
   bool _isConnected(List<ConnectivityResult> results) {
     return results.any((result) => result != ConnectivityResult.none);
+  }
+
+  Future<void> _rescheduleLocalNotifications() async {
+    final medications = await _localDataSource.getAll();
+    await _notificationService.rescheduleAll(medications);
   }
 }

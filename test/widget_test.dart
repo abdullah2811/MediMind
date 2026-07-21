@@ -14,6 +14,7 @@ class FakeMedicationRepository implements MedicationRepository {
 
   final List<Medication> medications;
   Medication? lastAdded;
+  Medication? lastUpdated;
 
   @override
   Future<void> add({
@@ -45,7 +46,9 @@ class FakeMedicationRepository implements MedicationRepository {
   Future<void> update({
     required String uid,
     required Medication medication,
-  }) async {}
+  }) async {
+    lastUpdated = medication;
+  }
 }
 
 class FakeSessionActivityStore implements SessionActivityStore {
@@ -240,9 +243,35 @@ void main() {
     expect(find.text('শক্তির পরিমাণ'), findsOneWidget);
     expect(find.text('খাওয়ার সময় ও পরিমাণ'), findsOneWidget);
     expect(find.text('পরিমাণ'), findsOneWidget);
+
+    await tester.tap(find.text('ট্যাবলেট'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('ইনসুলিন').last);
+    await tester.pumpAndSettle();
+    expect(find.text('ইউনিট'), findsOneWidget);
+
+    final timeButton = find.widgetWithIcon(OutlinedButton, Icons.access_time);
+    final dosageInput = find.ancestor(
+      of: find.text('পরিমাণ'),
+      matching: find.byType(InputDecorator),
+    );
+    expect(
+      (tester.getTopLeft(timeButton).dy - tester.getTopLeft(dosageInput).dy)
+          .abs(),
+      lessThan(1),
+    );
     await tester.drag(find.byType(ListView), const Offset(0, -700));
     await tester.pumpAndSettle();
     expect(find.text('খাবারের সময়ও মনে করিয়ে দিন'), findsOneWidget);
+    await tester.tap(find.byType(SwitchListTile));
+    await tester.pumpAndSettle();
+    expect(find.text('খাবারের আগে'), findsOneWidget);
+    expect(
+      tester
+          .widgetList<TextField>(find.byType(TextField))
+          .any((field) => field.controller?.text == '20'),
+      isTrue,
+    );
     await tester.drag(find.byType(ListView), const Offset(0, -500));
     await tester.pumpAndSettle();
     expect(find.text('ওষুধের ছবি'), findsOneWidget);
@@ -254,5 +283,59 @@ void main() {
     }
     expect(find.textContaining('Keep the form simple'), findsNothing);
     expect(find.text('Amount'), findsNothing);
+  });
+
+  testWidgets('medicine can be marked taken now from the dashboard', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(420, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = FakeMedicationRepository(
+      medications: [
+        Medication(
+          id: 'status-test',
+          medicineName: 'Napa',
+          dose: '1 pill',
+          doses: const [
+            MedicationDose(
+              timeOfDay: '23:59',
+              dosageValue: '1',
+              dosageUnit: 'pill',
+            ),
+          ],
+          durationDays: 0,
+          timeOfDay: '23:59',
+          mealOffset: -20,
+          isActive: true,
+          updatedAt: DateTime(2026, 7, 22),
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: repository,
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'test-user', displayName: 'Test User'),
+        ),
+        sessionActivityStore: FakeSessionActivityStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Eng'));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -850));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Taken').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Taken now'));
+    await tester.pumpAndSettle();
+
+    expect(repository.lastUpdated, isNotNull);
+    expect(repository.lastUpdated!.checkIns.single.medicineStatus, 'taken');
+    expect(repository.lastUpdated!.checkIns.single.medicineTakenAt, isNotNull);
   });
 }

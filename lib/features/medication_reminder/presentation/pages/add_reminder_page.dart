@@ -31,11 +31,12 @@ class _AddReminderPageState extends State<AddReminderPage> {
   final _formulaController = TextEditingController();
   final _companyController = TextEditingController();
   final _notesController = TextEditingController();
+  final _mealMinutesController = TextEditingController(text: '20');
   final _imagePicker = ImagePicker();
 
   String _medicineType = 'tablet';
   String _powerUnit = 'mg';
-  int _mealOffset = 0;
+  String _mealRelation = 'before';
   bool _mealScheduleEnabled = false;
   bool _busy = false;
   Uint8List? _imageBytes;
@@ -59,7 +60,15 @@ class _AddReminderPageState extends State<AddReminderPage> {
       _powerUnit = _powerUnits.contains(medication.powerUnit)
           ? medication.powerUnit
           : 'mg';
-      _mealOffset = medication.mealOffset;
+      if (medication.mealOffset < 0) {
+        _mealRelation = 'before';
+        _mealMinutesController.text = medication.mealOffset.abs().toString();
+      } else if (medication.mealOffset > 0) {
+        _mealRelation = 'after';
+        _mealMinutesController.text = medication.mealOffset.toString();
+      } else {
+        _mealRelation = 'with';
+      }
       _mealScheduleEnabled = medication.mealScheduleEnabled;
       _imagePath = medication.imagePath;
       _doseRows = _rowsFromMedication(medication);
@@ -73,6 +82,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
     _formulaController.dispose();
     _companyController.dispose();
     _notesController.dispose();
+    _mealMinutesController.dispose();
     for (final row in _doseRows) {
       row.dispose();
     }
@@ -110,11 +120,30 @@ class _AddReminderPageState extends State<AddReminderPage> {
         '${time.minute.toString().padLeft(2, '0')}';
   }
 
+  String _displayTime(TimeOfDay time) {
+    return MaterialLocalizations.of(
+      context,
+    ).formatTimeOfDay(time, alwaysUse24HourFormat: false);
+  }
+
   String get _dosageUnit {
     return switch (_medicineType) {
       'syrup' => 'ml',
       'drop' => 'drop',
+      'insulin' => 'unit',
       _ => 'pill',
+    };
+  }
+
+  int get _mealOffset {
+    final enteredMinutes = int.tryParse(_mealMinutesController.text.trim());
+    final minutes = (enteredMinutes == null || enteredMinutes <= 0)
+        ? 20
+        : enteredMinutes.clamp(1, 720);
+    return switch (_mealRelation) {
+      'before' => -minutes,
+      'after' => minutes,
+      _ => 0,
     };
   }
 
@@ -122,6 +151,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
     return switch (_dosageUnit) {
       'ml' => context.tr('ml'),
       'drop' => context.tr('drop_unit'),
+      'unit' => context.tr('units'),
       _ => context.tr('pill'),
     };
   }
@@ -137,6 +167,12 @@ class _AddReminderPageState extends State<AddReminderPage> {
       context: context,
       initialTime: row.time,
       helpText: context.tr('choose_reminder_time'),
+      builder: (context, child) {
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+          child: child!,
+        );
+      },
     );
     if (picked != null) {
       setState(() => row.time = picked);
@@ -233,6 +269,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
                   .map((row) => _canonicalTime(_mealTimeFor(row.time)))
                   .toList(growable: false)
             : const <String>[],
+        checkIns: existing?.checkIns ?? const <MedicationCheckIn>[],
         notes: _emptyToNull(_notesController.text),
         isActive: true,
         updatedAt: now,
@@ -322,7 +359,14 @@ class _AddReminderPageState extends State<AddReminderPage> {
                         .toList(growable: false),
                     onChanged: (value) {
                       if (value != null) {
-                        setState(() => _medicineType = value);
+                        setState(() {
+                          _medicineType = value;
+                          if (value == 'insulin') {
+                            _powerUnit = 'units/ml';
+                          } else if (_powerUnit == 'units/ml') {
+                            _powerUnit = 'mg';
+                          }
+                        });
                       }
                     },
                   ),
@@ -340,6 +384,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
                         ),
                       );
                       final unitField = DropdownButtonFormField<String>(
+                        key: ValueKey<String>('power-unit-$_medicineType'),
                         initialValue: _powerUnit,
                         isExpanded: true,
                         decoration: InputDecoration(
@@ -450,8 +495,8 @@ class _AddReminderPageState extends State<AddReminderPage> {
                   ),
                   if (_mealScheduleEnabled) ...[
                     const SizedBox(height: 8),
-                    DropdownButtonFormField<int>(
-                      initialValue: _mealOffset,
+                    DropdownButtonFormField<String>(
+                      initialValue: _mealRelation,
                       isExpanded: true,
                       decoration: InputDecoration(
                         labelText: context.tr('meal_relation'),
@@ -459,24 +504,37 @@ class _AddReminderPageState extends State<AddReminderPage> {
                       ),
                       items: [
                         DropdownMenuItem(
-                          value: -30,
-                          child: Text(context.tr('before_meal_30')),
+                          value: 'before',
+                          child: Text(context.tr('before_meal_custom')),
                         ),
                         DropdownMenuItem(
-                          value: 0,
+                          value: 'with',
                           child: Text(context.tr('at_meal')),
                         ),
                         DropdownMenuItem(
-                          value: 30,
-                          child: Text(context.tr('after_meal_30')),
+                          value: 'after',
+                          child: Text(context.tr('after_meal_custom')),
                         ),
                       ],
                       onChanged: (value) {
                         if (value != null) {
-                          setState(() => _mealOffset = value);
+                          setState(() => _mealRelation = value);
                         }
                       },
                     ),
+                    if (_mealRelation != 'with') ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _mealMinutesController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: context.tr('custom_meal_minutes'),
+                          suffixText: context.tr('minutes_short'),
+                          border: const OutlineInputBorder(),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     Text(
                       context.tr('calculated_meal_times'),
@@ -488,9 +546,9 @@ class _AddReminderPageState extends State<AddReminderPage> {
                         padding: const EdgeInsets.only(bottom: 6),
                         child: Text(
                           '${context.tr('medicine_at')} '
-                          '${row.time.format(context)} → '
+                          '${_displayTime(row.time)} → '
                           '${context.tr('meal_at')} '
-                          '${_mealTimeFor(row.time).format(context)}',
+                          '${_displayTime(_mealTimeFor(row.time))}',
                         ),
                       ),
                     ),
@@ -695,10 +753,22 @@ class _DoseRowEditor extends StatelessWidget {
             const SizedBox(height: 10),
             LayoutBuilder(
               builder: (context, constraints) {
-                final timeButton = OutlinedButton.icon(
-                  onPressed: onPickTime,
-                  icon: const Icon(Icons.access_time),
-                  label: Text(row.time.format(context)),
+                final timeButton = SizedBox(
+                  height: 56,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: onPickTime,
+                    icon: const Icon(Icons.access_time, size: 18),
+                    label: Text(
+                      MaterialLocalizations.of(
+                        context,
+                      ).formatTimeOfDay(row.time, alwaysUse24HourFormat: false),
+                      maxLines: 1,
+                      overflow: TextOverflow.fade,
+                    ),
+                  ),
                 );
                 final dosageField = TextField(
                   controller: row.dosageController,
@@ -711,22 +781,12 @@ class _DoseRowEditor extends StatelessWidget {
                     border: const OutlineInputBorder(),
                   ),
                 );
-                if (constraints.maxWidth < 430) {
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      timeButton,
-                      const SizedBox(height: 10),
-                      dosageField,
-                    ],
-                  );
-                }
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: timeButton),
+                    Expanded(flex: 5, child: timeButton),
                     const SizedBox(width: 10),
-                    Expanded(child: dosageField),
+                    Expanded(flex: 6, child: dosageField),
                   ],
                 );
               },
@@ -743,6 +803,7 @@ const List<String> _medicineTypes = <String>[
   'capsule',
   'syrup',
   'drop',
+  'insulin',
 ];
 
-const List<String> _powerUnits = <String>['mg', 'g', 'mcg'];
+const List<String> _powerUnits = <String>['mg', 'g', 'mcg', 'units/ml'];

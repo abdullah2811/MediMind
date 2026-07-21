@@ -125,6 +125,5 @@ Future<void> bootstrapApp() async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await configureFirebaseAuthForEnvironment(FirebaseAuth.instance);
   await Hive.initFlutter();
-  await MedicationNotificationService().initialize();
   runApp(const MediMindApp());
 }

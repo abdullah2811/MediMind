@@ -1,15 +1,77 @@
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../../domain/models/medication.dart';
 
+class MedicationReminderPlanItem {
+  MedicationReminderPlanItem({required this.timeOfDay});
+
+  final String timeOfDay;
+  final List<({Medication medication, MedicationDose dose})> doses = [];
+  final List<Medication> meals = [];
+
+  bool get hasMedicine => doses.isNotEmpty;
+  bool get hasMeal => meals.isNotEmpty;
+}
+
+List<MedicationReminderPlanItem> buildMedicationReminderPlan(
+  List<Medication> medications,
+) {
+  final events = <String, MedicationReminderPlanItem>{};
+
+  MedicationReminderPlanItem eventAt(String time) {
+    return events.putIfAbsent(
+      time,
+      () => MedicationReminderPlanItem(timeOfDay: time),
+    );
+  }
+
+  for (final medication in medications.where((item) => item.isActive)) {
+    final doses = medication.effectiveDoses;
+    for (var i = 0; i < doses.length; i++) {
+      final dose = doses[i];
+      if (dose.timeOfDay.isEmpty) {
+        continue;
+      }
+      final doseTime = _canonicalClockTime(dose.timeOfDay);
+      eventAt(doseTime).doses.add((medication: medication, dose: dose));
+
+      if (medication.mealScheduleEnabled) {
+        final mealTime = i < medication.mealTimes.length
+            ? medication.mealTimes[i]
+            : calculateMealTime(dose.timeOfDay, medication.mealOffset);
+        final mealEvent = eventAt(_canonicalClockTime(mealTime));
+        if (!mealEvent.meals.any((item) => item.id == medication.id)) {
+          mealEvent.meals.add(medication);
+        }
+      }
+    }
+  }
+
+  final plan = events.values.toList(growable: false)
+    ..sort((left, right) => left.timeOfDay.compareTo(right.timeOfDay));
+  return plan;
+}
+
+String _canonicalClockTime(String value) {
+  final parts = value.split(':');
+  final hour = parts.isNotEmpty ? int.tryParse(parts[0]) ?? 0 : 0;
+  final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
+  return '${hour.clamp(0, 23).toString().padLeft(2, '0')}:'
+      '${minute.clamp(0, 59).toString().padLeft(2, '0')}';
+}
+
 class MedicationNotificationService {
   MedicationNotificationService() : _plugin = FlutterLocalNotificationsPlugin();
 
+  static const _channelId = 'medimind_critical_reminders_v2';
   final FlutterLocalNotificationsPlugin _plugin;
   bool _initialized = false;
+  bool _canScheduleExact = true;
 
   Future<void> initialize() async {
     if (_initialized) {
@@ -19,158 +81,192 @@ class MedicationNotificationService {
     tz.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Asia/Dhaka'));
 
-    const androidSettings = AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
-    );
-    const iosSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
     const settings = InitializationSettings(
-      android: androidSettings,
-      iOS: iosSettings,
+      android: AndroidInitializationSettings('ic_stat_medimind'),
+      iOS: DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
+        defaultPresentAlert: true,
+        defaultPresentBadge: true,
+        defaultPresentSound: true,
+      ),
     );
 
     await _plugin.initialize(settings);
-    await _plugin
+    final android = _plugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.requestNotificationsPermission();
+        >();
+    await android?.requestNotificationsPermission();
+    await android?.requestExactAlarmsPermission();
+    await android?.requestFullScreenIntentPermission();
+    _canScheduleExact = await android?.canScheduleExactNotifications() ?? true;
+
     await _plugin
         .resolvePlatformSpecificImplementation<
           IOSFlutterLocalNotificationsPlugin
         >()
         ?.requestPermissions(alert: true, badge: true, sound: true);
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin
-        >()
-        ?.requestExactAlarmsPermission();
     _initialized = true;
   }
 
-  Future<void> scheduleMedication(Medication medication) async {
-    await initialize();
-    await cancelMedicationById(medication.id);
-
-    final doseTimes = medication.doseTimes.isNotEmpty
-        ? medication.doseTimes
-        : <String>[medication.timeOfDay];
-
-    final details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'medimind_reminders',
-        'Medicine reminders',
-        channelDescription: 'Medicine reminder alerts for MediMind',
-        category: AndroidNotificationCategory.alarm,
-        importance: Importance.max,
-        priority: Priority.high,
-        playSound: true,
-        audioAttributesUsage: AudioAttributesUsage.alarm,
-        fullScreenIntent: true,
-      ),
-      iOS: const DarwinNotificationDetails(
-        presentAlert: true,
-        presentSound: true,
-      ),
-    );
-
-    for (var i = 0; i < doseTimes.length; i++) {
-      final reminderTime = _parseTimeOfDay(doseTimes[i]);
-      final notificationId = _notificationId(medication.id, i);
-      final nextTrigger = _nextInstanceOf(reminderTime);
-
-      await _plugin.zonedSchedule(
-        notificationId,
-        medication.medicineName,
-        _notificationBody(medication, doseTimes[i]),
-        nextTrigger,
-        details,
-        androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation:
-            UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: DateTimeComponents.time,
-      );
-    }
-
-    if (medication.mealScheduleEnabled) {
-      final mealTimes = medication.mealTimes.isNotEmpty
-          ? medication.mealTimes
-          : doseTimes
-                .map((time) => calculateMealTime(time, medication.mealOffset))
-                .toList(growable: false);
-      for (var i = 0; i < mealTimes.length; i++) {
-        final mealTime = _parseTimeOfDay(mealTimes[i]);
-        await _plugin.zonedSchedule(
-          _notificationId(medication.id, 12 + i),
-          medication.languageCode == 'bn' ? 'খাবারের সময়' : 'Meal time',
-          medication.languageCode == 'bn'
-              ? '${medication.medicineName}-এর সঙ্গে মিলিয়ে এখন খাবারের সময়।'
-              : 'Your meal linked to ${medication.medicineName} is scheduled now.',
-          _nextInstanceOf(mealTime),
-          details,
-          androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-          uiLocalNotificationDateInterpretation:
-              UILocalNotificationDateInterpretation.absoluteTime,
-          matchDateTimeComponents: DateTimeComponents.time,
-        );
-      }
-    }
-  }
-
-  Future<void> cancelMedication(Medication medication) async {
-    await initialize();
-    await cancelMedicationById(medication.id);
-  }
-
-  Future<void> cancelMedicationById(
-    String medicationId, {
-    int possibleDoseCount = 24,
-  }) async {
-    await initialize();
-    for (var i = 0; i < possibleDoseCount; i++) {
-      await _plugin.cancel(_notificationId(medicationId, i));
-    }
+  Future<void> scheduleMedication(Medication medication) {
+    return rescheduleAll(<Medication>[medication]);
   }
 
   Future<void> rescheduleAll(List<Medication> medications) async {
     await initialize();
     await _plugin.cancelAll();
-    for (final medication in medications) {
-      await scheduleMedication(medication);
+
+    for (final event in buildMedicationReminderPlan(medications)) {
+      final trigger = _nextInstanceOf(_parseTimeOfDay(event.timeOfDay));
+      final content = _notificationContent(event);
+      final details = _notificationDetails(content.title, content.body);
+      await _plugin.zonedSchedule(
+        _notificationId(event.timeOfDay),
+        content.title,
+        content.body,
+        trigger,
+        details,
+        payload: event.timeOfDay,
+        androidScheduleMode: _canScheduleExact
+            ? AndroidScheduleMode.exactAllowWhileIdle
+            : AndroidScheduleMode.inexactAllowWhileIdle,
+        uiLocalNotificationDateInterpretation:
+            UILocalNotificationDateInterpretation.absoluteTime,
+        matchDateTimeComponents: DateTimeComponents.time,
+      );
     }
   }
 
-  String _notificationBody(Medication medication, String timeLabel) {
-    MedicationDose? matchingDose;
-    for (final dose in medication.effectiveDoses) {
-      if (dose.timeOfDay == timeLabel) {
-        matchingDose = dose;
-        break;
-      }
+  Future<void> cancelMedication(Medication medication) async {
+    await initialize();
+    await _plugin.cancelAll();
+  }
+
+  Future<void> cancelMedicationById(String medicationId) async {
+    await initialize();
+    await _plugin.cancelAll();
+  }
+
+  NotificationDetails _notificationDetails(String title, String body) {
+    return NotificationDetails(
+      android: AndroidNotificationDetails(
+        _channelId,
+        'MediMind alarms and reminders',
+        channelDescription:
+            'High-priority medicine and meal reminders from MediMind',
+        icon: 'ic_stat_medimind',
+        color: const Color(0xFF552746),
+        ledColor: const Color(0xFFE36B4F),
+        enableLights: true,
+        ledOnMs: 1000,
+        ledOffMs: 500,
+        category: AndroidNotificationCategory.alarm,
+        importance: Importance.max,
+        priority: Priority.max,
+        visibility: NotificationVisibility.public,
+        playSound: true,
+        enableVibration: true,
+        vibrationPattern: Int64List.fromList(<int>[0, 500, 220, 500, 220, 800]),
+        audioAttributesUsage: AudioAttributesUsage.alarm,
+        fullScreenIntent: true,
+        groupKey: 'medimind_daily_reminders',
+        ticker: 'MediMind reminder',
+        subText: 'MediMind',
+        styleInformation: BigTextStyleInformation(
+          body,
+          contentTitle: title,
+          summaryText: 'MediMind',
+        ),
+      ),
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBanner: true,
+        presentList: true,
+        presentSound: true,
+        presentBadge: true,
+        threadIdentifier: 'medimind_daily_reminders',
+        interruptionLevel: InterruptionLevel.timeSensitive,
+      ),
+    );
+  }
+
+  ({String title, String body}) _notificationContent(
+    MedicationReminderPlanItem event,
+  ) {
+    final isBangla = <Medication>[
+      ...event.doses.map((item) => item.medication),
+      ...event.meals,
+    ].every((item) => item.languageCode == 'bn');
+    final time = _format12Hour(event.timeOfDay);
+    final doseText = event.doses
+        .map((item) {
+          final value = item.dose.dosageValue.trim();
+          final unit = isBangla
+              ? _banglaDosageUnit(item.dose.dosageUnit)
+              : _englishDosageUnit(item.dose.dosageUnit);
+          return value.isEmpty
+              ? item.medication.medicineName
+              : '${item.medication.medicineName} — $value $unit';
+        })
+        .join(' • ');
+    final mealNames = event.meals
+        .map((item) => item.medicineName)
+        .toSet()
+        .join(', ');
+
+    if (isBangla) {
+      final title = event.hasMedicine && event.hasMeal
+          ? 'MediMind • ওষুধ ও খাবারের সময়'
+          : event.hasMedicine
+          ? 'MediMind • ওষুধের সময়'
+          : 'MediMind • খাবারের সময়';
+      final parts = <String>[
+        if (event.hasMedicine) doseText,
+        if (event.hasMeal) '$mealNames-এর সঙ্গে নির্ধারিত খাবার',
+        'সময় $time',
+      ];
+      return (title: title, body: parts.join(' • '));
     }
-    if (medication.languageCode == 'bn') {
-      final dosage = matchingDose == null || matchingDose.dosageValue.isEmpty
-          ? ''
-          : ' • পরিমাণ: ${matchingDose.dosageValue} '
-                '${_banglaDosageUnit(matchingDose.dosageUnit)}';
-      return 'ওষুধ খাওয়ার সময়: $timeLabel$dosage';
-    }
-    final dosage = matchingDose == null || matchingDose.dosageValue.isEmpty
-        ? ''
-        : ' • Dosage: ${matchingDose.dosageValue} '
-              '${matchingDose.dosageUnit}';
-    return 'Medicine time: $timeLabel$dosage';
+
+    final title = event.hasMedicine && event.hasMeal
+        ? 'MediMind • Medicine and meal'
+        : event.hasMedicine
+        ? 'MediMind • Medicine time'
+        : 'MediMind • Meal time';
+    final parts = <String>[
+      if (event.hasMedicine) doseText,
+      if (event.hasMeal) 'Meal linked to $mealNames',
+      'Due at $time',
+    ];
+    return (title: title, body: parts.join(' • '));
+  }
+
+  String _englishDosageUnit(String unit) {
+    return switch (unit) {
+      'ml' => 'ml',
+      'drop' => 'drop(s)',
+      'unit' => 'Units',
+      _ => 'pill(s)',
+    };
   }
 
   String _banglaDosageUnit(String unit) {
     return switch (unit) {
       'ml' => 'মি.লি.',
       'drop' => 'ফোঁটা',
+      'unit' => 'ইউনিট',
       _ => 'টি',
     };
+  }
+
+  String _format12Hour(String time) {
+    final parsed = _parseTimeOfDay(time);
+    final hour = parsed.hourOfPeriod == 0 ? 12 : parsed.hourOfPeriod;
+    final minute = parsed.minute.toString().padLeft(2, '0');
+    return '$hour:$minute ${parsed.period == DayPeriod.am ? 'AM' : 'PM'}';
   }
 
   TimeOfDay _parseTimeOfDay(String value) {
@@ -193,13 +289,14 @@ class MedicationNotificationService {
       timeOfDay.hour,
       timeOfDay.minute,
     );
-    if (scheduled.isBefore(now)) {
+    if (!scheduled.isAfter(now)) {
       scheduled = scheduled.add(const Duration(days: 1));
     }
     return scheduled;
   }
 
-  int _notificationId(String medicationId, int doseIndex) {
-    return ('${medicationId}_$doseIndex').hashCode & 0x7fffffff;
+  int _notificationId(String timeOfDay) {
+    final time = _parseTimeOfDay(timeOfDay);
+    return 310000 + time.hour * 60 + time.minute;
   }
 }

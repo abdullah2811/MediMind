@@ -86,6 +86,201 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
     }
   }
 
+  String _canonicalTime(DateTime time) {
+    return '${time.hour.toString().padLeft(2, '0')}:'
+        '${time.minute.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _saveCheckIn(
+    Medication medication,
+    DateTime scheduledTime,
+    MedicationCheckIn Function(MedicationCheckIn current) update,
+  ) async {
+    final doseTime = _canonicalTime(scheduledTime);
+    final current =
+        medication.checkInFor(scheduledTime, doseTime) ??
+        MedicationCheckIn(
+          dateKey: medicationDateKey(scheduledTime),
+          doseTime: doseTime,
+        );
+    final updatedCheckIn = update(current);
+    final checkIns =
+        medication.checkIns
+            .where((item) => item.key != updatedCheckIn.key)
+            .toList(growable: true)
+          ..add(updatedCheckIn);
+    await widget.repository.update(
+      uid: widget.uid,
+      medication: medication.copyWith(
+        checkIns: checkIns,
+        updatedAt: DateTime.now(),
+      ),
+    );
+    if (mounted) {
+      setState(_load);
+    }
+  }
+
+  Future<void> _recordMedicineTaken(
+    Medication medication,
+    DateTime scheduledTime, {
+    required DateTime takenAt,
+    required bool withMeal,
+  }) {
+    return _saveCheckIn(
+      medication,
+      scheduledTime,
+      (current) => MedicationCheckIn(
+        dateKey: current.dateKey,
+        doseTime: current.doseTime,
+        medicineStatus: 'taken',
+        mealStatus: withMeal ? 'taken' : current.mealStatus,
+        medicineTakenAt: takenAt,
+        mealTakenAt: withMeal ? takenAt : current.mealTakenAt,
+        takenWithMeal: withMeal,
+      ),
+    );
+  }
+
+  Future<void> _recordMedicineNotTaken(
+    Medication medication,
+    DateTime scheduledTime,
+  ) {
+    return _saveCheckIn(
+      medication,
+      scheduledTime,
+      (current) => MedicationCheckIn(
+        dateKey: current.dateKey,
+        doseTime: current.doseTime,
+        medicineStatus: 'notTaken',
+        mealStatus: current.mealStatus,
+        mealTakenAt: current.mealTakenAt,
+      ),
+    );
+  }
+
+  Future<void> _recordMealStatus(
+    Medication medication,
+    DateTime scheduledTime, {
+    required bool taken,
+  }) {
+    return _saveCheckIn(
+      medication,
+      scheduledTime,
+      (current) => MedicationCheckIn(
+        dateKey: current.dateKey,
+        doseTime: current.doseTime,
+        medicineStatus: current.medicineStatus,
+        mealStatus: taken ? 'taken' : 'notTaken',
+        medicineTakenAt: current.medicineTakenAt,
+        mealTakenAt: taken ? DateTime.now() : null,
+        takenWithMeal: taken && current.takenWithMeal,
+      ),
+    );
+  }
+
+  Future<void> _chooseTakenStatus(
+    Medication medication,
+    DateTime scheduledTime,
+  ) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                context.tr('when_taken'),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+              ),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(context, 'now'),
+                icon: const Icon(Icons.check_circle_outline),
+                label: Text(context.tr('taken_now')),
+              ),
+              const SizedBox(height: 10),
+              FilledButton.tonalIcon(
+                onPressed: () => Navigator.pop(context, 'withMeal'),
+                icon: const Icon(Icons.restaurant_outlined),
+                label: Text(context.tr('taken_with_food')),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.pop(context, 'later'),
+                icon: const Icon(Icons.schedule),
+                label: Text(context.tr('taken_later')),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (!mounted || choice == null) {
+      return;
+    }
+    if (choice == 'now' || choice == 'withMeal') {
+      await _recordMedicineTaken(
+        medication,
+        scheduledTime,
+        takenAt: DateTime.now(),
+        withMeal: choice == 'withMeal',
+      );
+      return;
+    }
+
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+      helpText: context.tr('choose_actual_time'),
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+        child: child!,
+      ),
+    );
+    if (!mounted || picked == null) {
+      return;
+    }
+    final withMeal = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.tr('also_with_food')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.tr('without_food')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.tr('taken_with_food')),
+          ),
+        ],
+      ),
+    );
+    if (withMeal == null) {
+      return;
+    }
+    final today = DateTime.now();
+    await _recordMedicineTaken(
+      medication,
+      scheduledTime,
+      takenAt: DateTime(
+        today.year,
+        today.month,
+        today.day,
+        picked.hour,
+        picked.minute,
+      ),
+      withMeal: withMeal,
+    );
+  }
+
   Future<void> _openAddPage() async {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
@@ -133,6 +328,42 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
             })
             .toList(growable: false)
           ..sort();
+    return candidates.first;
+  }
+
+  DateTime _trackingTime(Medication medication) {
+    final times = medication.effectiveDoses
+        .map((dose) => dose.timeOfDay)
+        .where((time) => time.isNotEmpty)
+        .toList(growable: false);
+    if (times.isEmpty) {
+      return _nextTime(medication);
+    }
+
+    final candidates = <DateTime>[];
+    for (final dayOffset in const <int>[-1, 0, 1]) {
+      final day = _now.add(Duration(days: dayOffset));
+      for (final time in times) {
+        final parts = time.split(':');
+        candidates.add(
+          DateTime(
+            day.year,
+            day.month,
+            day.day,
+            int.tryParse(parts.first) ?? 0,
+            parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0,
+          ),
+        );
+      }
+    }
+    candidates.sort((left, right) {
+      final leftDistance = left.difference(_now).inMinutes.abs();
+      final rightDistance = right.difference(_now).inMinutes.abs();
+      final distanceComparison = leftDistance.compareTo(rightDistance);
+      return distanceComparison != 0
+          ? distanceComparison
+          : left.compareTo(right);
+    });
     return candidates.first;
   }
 
@@ -258,9 +489,32 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                       sliver: SliverList.separated(
                         itemBuilder: (context, index) {
                           final medication = medications[index];
+                          final nextTime = _nextTime(medication);
+                          final trackingTime = _trackingTime(medication);
+                          final checkIn = medication.checkInFor(
+                            trackingTime,
+                            _canonicalTime(trackingTime),
+                          );
                           return _MedicineCard(
                             medication: medication,
-                            nextTime: _nextTime(medication),
+                            nextTime: nextTime,
+                            checkIn: checkIn,
+                            onMedicineTaken: () =>
+                                _chooseTakenStatus(medication, trackingTime),
+                            onMedicineNotTaken: () => _recordMedicineNotTaken(
+                              medication,
+                              trackingTime,
+                            ),
+                            onMealTaken: () => _recordMealStatus(
+                              medication,
+                              trackingTime,
+                              taken: true,
+                            ),
+                            onMealNotTaken: () => _recordMealStatus(
+                              medication,
+                              trackingTime,
+                              taken: false,
+                            ),
                             onTap: () => _showMedicationSheet(medication),
                           );
                         },
@@ -313,7 +567,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
               ),
               _DetailLine(
                 label: context.tr('time'),
-                value: medication.timeOfDay,
+                value: MaterialLocalizations.of(context).formatTimeOfDay(
+                  _parseDashboardTime(medication.timeOfDay),
+                  alwaysUse24HourFormat: false,
+                ),
               ),
               if ((medication.formula ?? '').isNotEmpty)
                 _DetailLine(
@@ -493,7 +750,12 @@ class _HeroHeader extends StatelessWidget {
                   right: 2,
                   bottom: 0,
                   child: Text(
-                    nextMedication?.timeOfDay ?? '--:--',
+                    nextMedication == null
+                        ? '--:--'
+                        : MaterialLocalizations.of(context).formatTimeOfDay(
+                            _parseDashboardTime(nextMedication!.timeOfDay),
+                            alwaysUse24HourFormat: false,
+                          ),
                     style: const TextStyle(
                       fontFamily: 'Manrope',
                       color: Colors.white,
@@ -760,11 +1022,21 @@ class _MedicineCard extends StatelessWidget {
   const _MedicineCard({
     required this.medication,
     required this.nextTime,
+    required this.checkIn,
+    required this.onMedicineTaken,
+    required this.onMedicineNotTaken,
+    required this.onMealTaken,
+    required this.onMealNotTaken,
     required this.onTap,
   });
 
   final Medication medication;
   final DateTime nextTime;
+  final MedicationCheckIn? checkIn;
+  final VoidCallback onMedicineTaken;
+  final VoidCallback onMedicineNotTaken;
+  final VoidCallback onMealTaken;
+  final VoidCallback onMealNotTaken;
   final VoidCallback onTap;
 
   @override
@@ -821,8 +1093,7 @@ class _MedicineCard extends StatelessWidget {
                         _InfoChip(
                           label:
                               '${context.tr('next')}: '
-                              '${nextTime.hour.toString().padLeft(2, '0')}:'
-                              '${nextTime.minute.toString().padLeft(2, '0')}',
+                              '${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(nextTime), alwaysUse24HourFormat: false)}',
                           icon: Icons.schedule,
                         ),
                         if (medication.powerLabel.isNotEmpty)
@@ -837,12 +1108,128 @@ class _MedicineCard extends StatelessWidget {
                           ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                    _StatusActions(
+                      title: context.tr('medicine_status'),
+                      status: checkIn?.medicineStatus,
+                      takenAt: checkIn?.medicineTakenAt,
+                      takenWithMeal: checkIn?.takenWithMeal ?? false,
+                      onTaken: onMedicineTaken,
+                      onNotTaken: onMedicineNotTaken,
+                    ),
+                    if (medication.mealScheduleEnabled) ...[
+                      const SizedBox(height: 10),
+                      _StatusActions(
+                        title: context.tr('meal_status'),
+                        status: checkIn?.mealStatus,
+                        takenAt: checkIn?.mealTakenAt,
+                        onTaken: onMealTaken,
+                        onNotTaken: onMealNotTaken,
+                      ),
+                    ],
                   ],
                 ),
               ),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _StatusActions extends StatelessWidget {
+  const _StatusActions({
+    required this.title,
+    required this.status,
+    required this.takenAt,
+    required this.onTaken,
+    required this.onNotTaken,
+    this.takenWithMeal = false,
+  });
+
+  final String title;
+  final String? status;
+  final DateTime? takenAt;
+  final bool takenWithMeal;
+  final VoidCallback onTaken;
+  final VoidCallback onNotTaken;
+
+  @override
+  Widget build(BuildContext context) {
+    final isTaken = status == 'taken';
+    final isNotTaken = status == 'notTaken';
+    final statusText = isTaken
+        ? context.tr('status_taken')
+        : isNotTaken
+        ? context.tr('status_not_taken')
+        : context.tr('status_pending');
+    final detail = takenAt == null
+        ? statusText
+        : '$statusText • ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(takenAt!), alwaysUse24HourFormat: false)}${takenWithMeal ? ' • ${context.tr('with_food')}' : ''}';
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: AppPalette.ivory,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppPalette.plum.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  detail,
+                  maxLines: 2,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    color: isTaken
+                        ? AppPalette.aubergine
+                        : isNotTaken
+                        ? AppPalette.persimmon
+                        : AppPalette.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onNotTaken,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                  ),
+                  child: Text(context.tr('mark_not_taken')),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: FilledButton(
+                  onPressed: onTaken,
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                  ),
+                  child: Text(context.tr('mark_taken')),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -912,9 +1299,22 @@ String _localizedDoseSummary(BuildContext context, Medication medication) {
         final unit = switch (dose.dosageUnit) {
           'ml' => context.tr('ml'),
           'drop' => context.tr('drop_unit'),
+          'unit' => context.tr('units'),
           _ => context.tr('pill'),
         };
-        return '${dose.timeOfDay} — ${dose.dosageValue} $unit';
+        final displayTime = MaterialLocalizations.of(context).formatTimeOfDay(
+          _parseDashboardTime(dose.timeOfDay),
+          alwaysUse24HourFormat: false,
+        );
+        return '$displayTime — ${dose.dosageValue} $unit';
       })
       .join(' • ');
+}
+
+TimeOfDay _parseDashboardTime(String value) {
+  final parts = value.split(':');
+  return TimeOfDay(
+    hour: parts.isNotEmpty ? int.tryParse(parts[0]) ?? 0 : 0,
+    minute: parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0,
+  );
 }

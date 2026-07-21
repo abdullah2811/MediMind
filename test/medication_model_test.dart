@@ -25,6 +25,17 @@ void main() {
       mealOffset: -30,
       mealScheduleEnabled: true,
       mealTimes: const ['08:30'],
+      checkIns: [
+        MedicationCheckIn(
+          dateKey: '2026-07-20',
+          doseTime: '08:00',
+          medicineStatus: 'taken',
+          mealStatus: 'taken',
+          medicineTakenAt: DateTime.utc(2026, 7, 20, 8, 12),
+          mealTakenAt: DateTime.utc(2026, 7, 20, 8, 30),
+          takenWithMeal: true,
+        ),
+      ],
       isActive: true,
       updatedAt: DateTime.utc(2026, 7, 20),
     );
@@ -38,6 +49,8 @@ void main() {
     expect(restored.doses.single.timeOfDay, '08:00');
     expect(restored.doses.single.dosageValue, '5');
     expect(restored.doses.single.dosageUnit, 'ml');
+    expect(restored.checkIns.single.medicineStatus, 'taken');
+    expect(restored.checkIns.single.takenWithMeal, isTrue);
   });
 
   test('legacy medicine records remain readable and reminders are enabled', () {
