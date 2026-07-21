@@ -212,37 +212,16 @@ requests can trigger Firebase throttling even in a development environment.
 
 ## Firestore configuration
 
-The application stores medicine documents in the `reminders` collection. Each
-document contains a `uid` field and must only be accessible to its owner.
-
-The following is a suitable starting point for Firestore rules. Review and
-adapt it before production deployment:
+The application stores each user's medicine documents under:
 
 ```text
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /reminders/{reminderId} {
-      allow create: if request.auth != null
-                    && request.resource.data.uid == request.auth.uid;
-
-      allow read: if request.auth != null
-                  && resource.data.uid == request.auth.uid;
-
-      allow update: if request.auth != null
-                    && resource.data.uid == request.auth.uid
-                    && request.resource.data.uid == request.auth.uid;
-
-      allow delete: if request.auth != null
-                    && resource.data.uid == request.auth.uid;
-    }
-  }
-}
+users/{userId}/reminders/{reminderId}
 ```
 
-Create the required Firestore indexes if Firebase reports an index error. The
-current user query filters reminders by `uid` and normally does not require a
-custom composite index.
+The checked-in `firestore.rules` file only permits the authenticated owner to
+access that path and validates the document's `uid` and `reminderId` fields.
+The path-scoped design also permits safe deletion of a backup that does not yet
+exist without allowing one user to delete another user's data.
 
 ## Firebase Storage configuration
 
@@ -252,22 +231,21 @@ Medicine photos are uploaded to:
 medication_images/{userId}/{medicineId}.jpg
 ```
 
-Use owner-only Storage rules. The following is a suitable starting point:
+The checked-in `storage.rules` file permits owner-only access and restricts
+uploads to images smaller than 10 MB.
 
-```text
-rules_version = '2';
-service firebase.storage {
-  match /b/{bucket}/o {
-    match /medication_images/{userId}/{fileName} {
-      allow read, write: if request.auth != null
-                         && request.auth.uid == userId;
-    }
-  }
-}
+Deploy both rulesets after signing in to the Firebase CLI:
+
+```powershell
+firebase login
+firebase deploy --only firestore:rules --project medimind-368ed
+firebase deploy --only storage --project medimind-368ed
 ```
 
-For production, consider validating image MIME types and maximum file sizes in
-the Storage rules.
+The rule files are connected to those commands through `firebase.json`. If the
+CLI is unavailable, copy `firestore.rules` into **Firestore Database > Rules**
+and `storage.rules` into **Storage > Rules** in Firebase Console, then publish
+each ruleset.
 
 ## Platform permissions
 

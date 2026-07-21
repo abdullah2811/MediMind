@@ -56,7 +56,7 @@ class MedicationSyncService {
             medication: medication,
           );
         case SyncOperation.delete:
-          await _remoteDataSource.deleteMedication(medication.id);
+          await _remoteDataSource.deleteMedication(uid: uid, id: medication.id);
           await _localDataSource.clearPendingDeletion(medication.id);
       }
     } catch (error, stackTrace) {
@@ -74,7 +74,9 @@ class MedicationSyncService {
         ? fileName
         : 'medicine_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final ref = _storage.ref('medication_images/$userId/$safeFileName');
-    await ref.putData(fileBytes).timeout(const Duration(seconds: 30));
+    await ref
+        .putData(fileBytes, SettableMetadata(contentType: 'image/jpeg'))
+        .timeout(const Duration(seconds: 30));
     return ref.getDownloadURL().timeout(const Duration(seconds: 20));
   }
 
@@ -82,7 +84,7 @@ class MedicationSyncService {
     final pendingDeletionIds = await _localDataSource.getPendingDeletionIds();
     for (final id in pendingDeletionIds) {
       await _remoteDataSource
-          .deleteMedication(id)
+          .deleteMedication(uid: uid, id: id)
           .timeout(const Duration(seconds: 20));
       await _localDataSource.clearPendingDeletion(id);
     }

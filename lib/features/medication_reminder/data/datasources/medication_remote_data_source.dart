@@ -9,19 +9,25 @@ class MedicationRemoteDataSource {
 
   final FirebaseFirestore _firestore;
 
-  CollectionReference<Map<String, dynamic>> get _reminders =>
-      _firestore.collection(FirestoreCollections.reminders);
+  CollectionReference<Map<String, dynamic>> _remindersFor(String uid) =>
+      _firestore
+          .collection(FirestoreCollections.users)
+          .doc(uid)
+          .collection(FirestoreCollections.reminders);
 
   Future<void> upsertMedication({
     required String uid,
     required Medication medication,
   }) async {
-    await _reminders
+    await _remindersFor(uid)
         .doc(medication.id)
         .set(medication.toFirestore(uid: uid), SetOptions(merge: true));
   }
 
-  Future<void> deleteMedication(String id) async {
-    await _reminders.doc(id).delete();
+  Future<void> deleteMedication({
+    required String uid,
+    required String id,
+  }) async {
+    await _remindersFor(uid).doc(id).delete();
   }
 }
