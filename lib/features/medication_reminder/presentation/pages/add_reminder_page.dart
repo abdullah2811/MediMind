@@ -14,13 +14,11 @@ class AddReminderPage extends StatefulWidget {
     super.key,
     required this.repository,
     required this.uid,
-    required this.onSignOut,
     this.existingMedication,
   });
 
   final MedicationRepository repository;
   final String uid;
-  final Future<void> Function() onSignOut;
   final Medication? existingMedication;
 
   @override
@@ -276,10 +274,10 @@ class _AddReminderPageState extends State<AddReminderPage> {
     return Scaffold(
       appBar: AppBar(
         title: Text(context.tr(isEditing ? 'edit_medicine' : 'add_medicine')),
-        actions: [
-          TextButton(
-            onPressed: widget.onSignOut,
-            child: Text(context.tr('sign_out')),
+        actions: const [
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+            child: LanguageToggleButton(),
           ),
         ],
       ),
@@ -338,7 +336,6 @@ class _AddReminderPageState extends State<AddReminderPage> {
                         ),
                         decoration: InputDecoration(
                           labelText: context.tr('power_value'),
-                          hintText: '45',
                           border: const OutlineInputBorder(),
                         ),
                       );
@@ -710,7 +707,6 @@ class _DoseRowEditor extends StatelessWidget {
                   ),
                   decoration: InputDecoration(
                     labelText: context.tr('dosage_value'),
-                    hintText: '1',
                     suffixText: dosageUnit,
                     border: const OutlineInputBorder(),
                   ),

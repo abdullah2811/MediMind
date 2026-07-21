@@ -24,11 +24,4 @@ class MedicationRemoteDataSource {
   Future<void> deleteMedication(String id) async {
     await _reminders.doc(id).delete();
   }
-
-  Future<List<Medication>> fetchForUser(String uid) async {
-    final snapshot = await _reminders.where('uid', isEqualTo: uid).get();
-    return snapshot.docs
-        .map((doc) => Medication.fromFirestore(doc))
-        .toList(growable: false);
-  }
 }

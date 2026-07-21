@@ -2,8 +2,8 @@
 
 MediMind is a bilingual medication reminder application built with Flutter and
 Firebase. It is designed for users in Bangladesh, works with or without an
-active internet connection, and keeps medicine schedules available locally
-while synchronizing them with Firebase when connectivity returns.
+active internet connection. The device database is the source of truth, while
+Firebase is used only as an online backup when connectivity is available.
 
 The application currently targets Android, iOS, and the web.
 
@@ -23,10 +23,11 @@ The application currently targets Android, iOS, and the web.
 - A dashboard showing the next medicine and a dynamic 24-hour day-cycle arc.
 - Local-first storage using Hive.
 - Automatic Firebase backup after medicines are added or updated.
-- Automatic retry and synchronization when network connectivity returns.
-- Persistent offline deletion records so deleted medicines are not restored by
-  a later cloud synchronization.
-- Manual backup and refresh controls when medicines exist.
+- Automatic backup retry when network connectivity returns.
+- Persistent offline deletion records so cloud backups reflect local deletes.
+- Manual backup controls when medicines exist.
+- Persistent mobile sign-in with automatic sign-out after 30 days of
+  inactivity.
 - Responsive layouts for narrow phone screens and wider web screens.
 
 ## Technology stack
@@ -293,7 +294,8 @@ at runtime.
 
 ## Offline storage and synchronization
 
-MediMind follows a local-first workflow:
+MediMind follows a strict local-first workflow. Hive is always the source of
+truth; automatic synchronization never replaces local data with cloud data.
 
 1. A medicine is saved to Hive immediately.
 2. Local notifications are scheduled immediately.
@@ -301,9 +303,7 @@ MediMind follows a local-first workflow:
 4. If the device is offline, the local record remains available and usable.
 5. Connectivity changes are monitored while the signed-in dashboard is open.
 6. When a network connection becomes available, local medicines and pending
-   deletions are uploaded first.
-7. Cloud medicines are then downloaded to refresh the local database.
-8. Notifications are rescheduled from the synchronized result.
+   deletions are uploaded to the user's cloud backup.
 
 The app also retries synchronization every 30 seconds while a network
 connection is reported. A network connection does not always guarantee working
@@ -311,8 +311,7 @@ internet access, so upload failures are handled and retried instead of deleting
 local data.
 
 Offline deletions are stored as local tombstones. They are sent to Firestore
-before the next cloud download, preventing a deleted medicine from being
-restored accidentally.
+before the next backup upload so the online backup matches the local database.
 
 The manual **Backup** button remains available when at least one medicine
 exists. If manual backup fails because the device is offline, the app confirms

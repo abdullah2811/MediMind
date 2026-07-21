@@ -156,8 +156,6 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
               controller: _phoneController,
               decoration: InputDecoration(
                 labelText: context.tr('bangladesh_mobile_number'),
-                hintText: '01712345678',
-                helperText: context.tr('phone_format_help'),
                 border: const OutlineInputBorder(),
               ),
               keyboardType: TextInputType.phone,

@@ -5,25 +5,21 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
 import '../datasources/medication_local_data_source.dart';
-import '../datasources/medication_remote_data_source.dart';
 import '../services/medication_notification_service.dart';
 import '../services/medication_sync_service.dart';
 
 class MedicationRepositoryImpl implements MedicationRepository {
   MedicationRepositoryImpl({
     required MedicationLocalDataSource localDataSource,
-    required MedicationRemoteDataSource remoteDataSource,
     required MedicationSyncService syncService,
     required MedicationNotificationService notificationService,
     required Connectivity connectivity,
   }) : _localDataSource = localDataSource,
-       _remoteDataSource = remoteDataSource,
        _syncService = syncService,
        _notificationService = notificationService,
        _connectivity = connectivity;
 
   final MedicationLocalDataSource _localDataSource;
-  final MedicationRemoteDataSource _remoteDataSource;
   final MedicationSyncService _syncService;
   final MedicationNotificationService _notificationService;
   final Connectivity _connectivity;
@@ -41,7 +37,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     if (medication.isActive) {
       await _notificationService.scheduleMedication(medication);
     }
-    _syncService.queueBackupAndSync(uid: uid);
+    _syncService.queueBackup(uid: uid);
   }
 
   @override
@@ -64,11 +60,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
 
   @override
   Future<List<Medication>> getAll({required String uid}) async {
-    final localMedications = await _localDataSource.getAll();
-    if (localMedications.isNotEmpty) {
-      return localMedications;
-    }
-    return _remoteDataSource.fetchForUser(uid);
+    return _localDataSource.getAll();
   }
 
   @override
@@ -77,13 +69,8 @@ class MedicationRepositoryImpl implements MedicationRepository {
   }
 
   @override
-  Future<void> syncFromCloud({required String uid}) async {
-    await _syncService.backupAndSync(uid: uid);
-  }
-
-  @override
   Future<void> backupToCloud({required String uid}) async {
-    await _syncService.backupLocalToCloud(uid: uid);
+    await _syncService.backup(uid: uid);
   }
 
   @override
@@ -101,7 +88,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     if (medication.isActive) {
       await _notificationService.scheduleMedication(medication);
     }
-    _syncService.queueBackupAndSync(uid: uid);
+    _syncService.queueBackup(uid: uid);
   }
 
   @override
@@ -113,12 +100,12 @@ class MedicationRepositoryImpl implements MedicationRepository {
     ) {
       _hasNetworkConnection = _isConnected(results);
       if (_hasNetworkConnection) {
-        _syncService.queueBackupAndSync(uid: uid);
+        _syncService.queueBackup(uid: uid);
       }
     });
     _retryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (_hasNetworkConnection && _autoSyncUid == uid) {
-        _syncService.queueBackupAndSync(uid: uid);
+        _syncService.queueBackup(uid: uid);
       }
     });
 
@@ -126,7 +113,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     _hasNetworkConnection = _isConnected(current);
     if (_hasNetworkConnection) {
       try {
-        await _syncService.backupAndSync(uid: uid);
+        await _syncService.backup(uid: uid);
       } catch (_) {
         // Local data is already durable. The listener/timer retries later.
       }

@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:medimind/app.dart';
+import 'package:medimind/core/localization/app_localization.dart';
 import 'package:medimind/features/auth/domain/app_user.dart';
 import 'package:medimind/features/auth/domain/auth_repository.dart';
+import 'package:medimind/features/auth/data/session_activity_store.dart';
 import 'package:medimind/features/medication_reminder/domain/models/medication.dart';
 import 'package:medimind/features/medication_reminder/domain/repositories/medication_repository.dart';
 
@@ -31,9 +33,6 @@ class FakeMedicationRepository implements MedicationRepository {
   Future<Medication?> getById(String id) async => null;
 
   @override
-  Future<void> syncFromCloud({required String uid}) async {}
-
-  @override
   Future<void> backupToCloud({required String uid}) async {}
 
   @override
@@ -47,6 +46,23 @@ class FakeMedicationRepository implements MedicationRepository {
     required String uid,
     required Medication medication,
   }) async {}
+}
+
+class FakeSessionActivityStore implements SessionActivityStore {
+  final Map<String, DateTime> _activities = <String, DateTime>{};
+
+  @override
+  Future<void> clear(String uid) async {
+    _activities.remove(uid);
+  }
+
+  @override
+  Future<DateTime?> readLastActivity(String uid) async => _activities[uid];
+
+  @override
+  Future<void> writeLastActivity(String uid, DateTime time) async {
+    _activities[uid] = time;
+  }
 }
 
 class FakeAuthRepository implements AuthRepository {
@@ -81,6 +97,25 @@ class FakeAuthRepository implements AuthRepository {
 }
 
 void main() {
+  test('mobile session expires after 30 days without activity', () {
+    final now = DateTime(2026, 7, 22, 12);
+
+    expect(
+      isMobileSessionExpired(
+        lastActivity: now.subtract(const Duration(days: 29)),
+        now: now,
+      ),
+      isFalse,
+    );
+    expect(
+      isMobileSessionExpired(
+        lastActivity: now.subtract(const Duration(days: 30)),
+        now: now,
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets('shows only phone and Gmail sign-in options in Bangla', (
     WidgetTester tester,
   ) async {
@@ -88,6 +123,7 @@ void main() {
       MediMindApp(
         repository: FakeMedicationRepository(),
         authRepository: FakeAuthRepository(null),
+        sessionActivityStore: FakeSessionActivityStore(),
       ),
     );
     await tester.pumpAndSettle();
@@ -97,6 +133,14 @@ void main() {
     expect(find.text('Email address'), findsNothing);
     expect(find.text('Password'), findsNothing);
     expect(find.text('Sign up'), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.phone_android));
+    await tester.pumpAndSettle();
+    final phoneInput = tester.widget<InputDecorator>(
+      find.byType(InputDecorator).first,
+    );
+    expect(phoneInput.decoration.hintText, isNull);
+    expect(phoneInput.decoration.helperText, isNull);
   });
 
   testWidgets('renders the Bangla dashboard for signed-in users', (
@@ -108,6 +152,7 @@ void main() {
         authRepository: FakeAuthRepository(
           const AppUser(uid: 'test-user', displayName: 'Test User'),
         ),
+        sessionActivityStore: FakeSessionActivityStore(),
       ),
     );
     await tester.pumpAndSettle();
@@ -127,6 +172,7 @@ void main() {
       MediMindApp(
         repository: FakeMedicationRepository(),
         authRepository: FakeAuthRepository(null),
+        sessionActivityStore: FakeSessionActivityStore(),
       ),
     );
     await tester.pumpAndSettle();
@@ -157,6 +203,7 @@ void main() {
         authRepository: FakeAuthRepository(
           const AppUser(uid: 'test-user', displayName: 'Test User'),
         ),
+        sessionActivityStore: FakeSessionActivityStore(),
       ),
     );
     await tester.pumpAndSettle();
@@ -180,6 +227,7 @@ void main() {
         authRepository: FakeAuthRepository(
           const AppUser(uid: 'test-user', displayName: 'Test User'),
         ),
+        sessionActivityStore: FakeSessionActivityStore(),
       ),
     );
     await tester.pumpAndSettle();
@@ -198,6 +246,12 @@ void main() {
     await tester.drag(find.byType(ListView), const Offset(0, -500));
     await tester.pumpAndSettle();
     expect(find.text('ওষুধের ছবি'), findsOneWidget);
+    expect(find.byIcon(Icons.logout_outlined), findsNothing);
+    expect(find.byType(LanguageToggleButton), findsOneWidget);
+    for (final field in tester.widgetList<TextField>(find.byType(TextField))) {
+      expect(field.decoration?.hintText, isNull);
+      expect(field.decoration?.helperText, isNull);
+    }
     expect(find.textContaining('Keep the form simple'), findsNothing);
     expect(find.text('Amount'), findsNothing);
   });

@@ -61,20 +61,11 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
     _medicationsFuture = widget.repository.getAll(uid: widget.uid);
   }
 
-  Future<void> _syncAndRefresh() async {
-    try {
-      await widget.repository.syncFromCloud(uid: widget.uid);
-    } catch (_) {
-      // Local reminders stay usable; automatic sync retries when online.
-    } finally {
-      if (mounted) {
-        setState(_load);
-      }
-    }
-  }
-
   Future<void> _refresh() async {
-    await _syncAndRefresh();
+    if (mounted) {
+      setState(_load);
+    }
+    await _medicationsFuture;
   }
 
   Future<void> _backup() async {
@@ -98,11 +89,8 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
   Future<void> _openAddPage() async {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => AddReminderPage(
-          repository: widget.repository,
-          uid: widget.uid,
-          onSignOut: widget.onSignOut,
-        ),
+        builder: (_) =>
+            AddReminderPage(repository: widget.repository, uid: widget.uid),
       ),
     );
     if (changed == true && mounted) {
@@ -184,10 +172,9 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                       style: TextStyle(fontWeight: FontWeight.w800),
                     ),
                     actions: [
-                      IconButton(
-                        tooltip: context.tr('refresh_from_cloud'),
-                        onPressed: _refresh,
-                        icon: const Icon(Icons.sync),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 8),
+                        child: LanguageToggleButton(),
                       ),
                       IconButton(
                         tooltip: context.tr('sign_out'),
@@ -372,7 +359,6 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                                 builder: (_) => AddReminderPage(
                                   repository: widget.repository,
                                   uid: widget.uid,
-                                  onSignOut: widget.onSignOut,
                                   existingMedication: medication,
                                 ),
                               ),
@@ -483,7 +469,7 @@ class _HeroHeader extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           SizedBox(
-            height: 132,
+            height: 148,
             child: Stack(
               children: [
                 Positioned.fill(
@@ -532,10 +518,11 @@ class _DayCyclePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    final diameter = math.min(size.width - 32, (size.height - 20) * 2);
     final rect = Rect.fromCenter(
-      center: Offset(size.width / 2, size.height - 18),
-      width: size.width - 24,
-      height: (size.height - 34) * 2,
+      center: Offset(size.width / 2, size.height - 12),
+      width: diameter,
+      height: diameter,
     );
     final basePaint = Paint()
       ..color = Colors.white.withValues(alpha: 0.18)
@@ -562,24 +549,6 @@ class _DayCyclePainter extends CustomPainter {
       );
       canvas.drawCircle(marker, 7, Paint()..color = Colors.white);
       canvas.drawCircle(marker, 3.5, Paint()..color = AppPalette.saffron);
-    }
-
-    final sun = Offset(size.width / 2, 12);
-    canvas.drawCircle(
-      sun,
-      7,
-      Paint()..color = AppPalette.saffron.withValues(alpha: 0.95),
-    );
-    for (var i = 0; i < 8; i++) {
-      final angle = i * math.pi / 4;
-      canvas.drawLine(
-        Offset(sun.dx + 10 * math.cos(angle), sun.dy + 10 * math.sin(angle)),
-        Offset(sun.dx + 14 * math.cos(angle), sun.dy + 14 * math.sin(angle)),
-        Paint()
-          ..color = AppPalette.saffron.withValues(alpha: 0.75)
-          ..strokeWidth = 1.5
-          ..strokeCap = StrokeCap.round,
-      );
     }
   }
 

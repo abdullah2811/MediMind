@@ -13,6 +13,7 @@ import 'core/theme/app_theme.dart';
 import 'core/theme/app_licenses.dart';
 import 'firebase_options.dart';
 import 'features/auth/data/firebase_auth_repository.dart';
+import 'features/auth/data/session_activity_store.dart';
 import 'features/auth/domain/auth_repository.dart';
 import 'features/auth/presentation/pages/auth_gate.dart';
 import 'features/medication_reminder/data/datasources/medication_local_data_source.dart';
@@ -23,10 +24,16 @@ import 'features/medication_reminder/data/services/medication_sync_service.dart'
 import 'features/medication_reminder/domain/repositories/medication_repository.dart';
 
 class MediMindApp extends StatefulWidget {
-  const MediMindApp({super.key, this.repository, this.authRepository});
+  const MediMindApp({
+    super.key,
+    this.repository,
+    this.authRepository,
+    this.sessionActivityStore,
+  });
 
   final MedicationRepository? repository;
   final AuthRepository? authRepository;
+  final SessionActivityStore? sessionActivityStore;
 
   @override
   State<MediMindApp> createState() => _MediMindAppState();
@@ -36,6 +43,7 @@ class _MediMindAppState extends State<MediMindApp> {
   late final AppLanguageController _languageController;
   late final MedicationRepository _medicationRepository;
   late final AuthRepository _authenticationRepository;
+  late final SessionActivityStore _sessionActivityStore;
 
   @override
   void initState() {
@@ -46,6 +54,8 @@ class _MediMindAppState extends State<MediMindApp> {
         widget.repository ?? _buildDefaultRepository(notificationService);
     _authenticationRepository =
         widget.authRepository ?? _buildDefaultAuthRepository();
+    _sessionActivityStore =
+        widget.sessionActivityStore ?? HiveSessionActivityStore();
   }
 
   @override
@@ -69,6 +79,7 @@ class _MediMindAppState extends State<MediMindApp> {
             home: AuthGate(
               authRepository: _authenticationRepository,
               medicationRepository: _medicationRepository,
+              sessionActivityStore: _sessionActivityStore,
             ),
           );
         },
@@ -96,13 +107,11 @@ class _MediMindAppState extends State<MediMindApp> {
 
     return MedicationRepositoryImpl(
       localDataSource: localDataSource,
-      remoteDataSource: remoteDataSource,
       syncService: MedicationSyncService(
         firestore: firestore,
         storage: storage,
         localDataSource: localDataSource,
         remoteDataSource: remoteDataSource,
-        notificationService: notificationService,
       ),
       notificationService: notificationService,
       connectivity: Connectivity(),
