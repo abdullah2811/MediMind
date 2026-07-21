@@ -102,6 +102,12 @@ class MedicationNotificationService {
     if (_initialized) {
       return;
     }
+    if (kIsWeb) {
+      // flutter_local_notifications has no web platform implementation.
+      // Medicines still save locally and web builds simply skip OS alarms.
+      _initialized = true;
+      return;
+    }
 
     tz.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Asia/Dhaka'));
@@ -141,6 +147,9 @@ class MedicationNotificationService {
   }
 
   Future<void> rescheduleAll(List<Medication> medications) async {
+    if (kIsWeb) {
+      return;
+    }
     await initialize();
     await _plugin.cancelAll();
 
@@ -171,11 +180,17 @@ class MedicationNotificationService {
   }
 
   Future<void> cancelMedication(Medication medication) async {
+    if (kIsWeb) {
+      return;
+    }
     await initialize();
     await _plugin.cancelAll();
   }
 
   Future<void> cancelMedicationById(String medicationId) async {
+    if (kIsWeb) {
+      return;
+    }
     await initialize();
     await _plugin.cancelAll();
   }

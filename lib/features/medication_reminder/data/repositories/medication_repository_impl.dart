@@ -123,6 +123,11 @@ class MedicationRepositoryImpl implements MedicationRepository {
 
   Future<void> _rescheduleLocalNotifications() async {
     final medications = await _localDataSource.getAll();
-    await _notificationService.rescheduleAll(medications);
+    try {
+      await _notificationService.rescheduleAll(medications);
+    } catch (_) {
+      // The local database is the source of truth. Notification permission or
+      // platform failures must never make a successful local save look failed.
+    }
   }
 }
