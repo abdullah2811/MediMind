@@ -8,6 +8,9 @@ import 'package:medimind/features/medication_reminder/domain/models/medication.d
 import 'package:medimind/features/medication_reminder/domain/repositories/medication_repository.dart';
 
 class FakeMedicationRepository implements MedicationRepository {
+  FakeMedicationRepository({this.medications = const <Medication>[]});
+
+  final List<Medication> medications;
   Medication? lastAdded;
 
   @override
@@ -22,8 +25,7 @@ class FakeMedicationRepository implements MedicationRepository {
   Future<void> delete({required String uid, required String id}) async {}
 
   @override
-  Future<List<Medication>> getAll({required String uid}) async =>
-      <Medication>[];
+  Future<List<Medication>> getAll({required String uid}) async => medications;
 
   @override
   Future<Medication?> getById(String id) async => null;
@@ -33,6 +35,12 @@ class FakeMedicationRepository implements MedicationRepository {
 
   @override
   Future<void> backupToCloud({required String uid}) async {}
+
+  @override
+  Future<void> startAutoSync({required String uid}) async {}
+
+  @override
+  Future<void> stopAutoSync() async {}
 
   @override
   Future<void> update({
@@ -105,7 +113,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('আজকের ওষুধ'), findsOneWidget);
-    expect(find.text('ঢাকা, বাংলাদেশ'), findsOneWidget);
+    expect(find.text('ঢাকা, বাংলাদেশ'), findsNothing);
+    expect(find.text('ব্যাকআপ নিন'), findsNothing);
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+    expect(find.text('ওষুধ যোগ করুন'), findsOneWidget);
   });
 
   testWidgets('language can be changed to English from the login screen', (
@@ -119,11 +131,39 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('English'));
+    await tester.tap(find.text('Eng'));
     await tester.pumpAndSettle();
 
     expect(find.text('Phone number'), findsOneWidget);
     expect(find.text('Gmail account'), findsOneWidget);
+  });
+
+  testWidgets('dashboard actions appear after a medicine exists', (
+    WidgetTester tester,
+  ) async {
+    final medicine = Medication(
+      id: 'one',
+      medicineName: 'Napa',
+      dose: '09:00 — 1 pill',
+      durationDays: 0,
+      timeOfDay: '09:00',
+      mealOffset: 0,
+      isActive: true,
+      updatedAt: DateTime(2026, 7, 22),
+    );
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: FakeMedicationRepository(medications: [medicine]),
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'test-user', displayName: 'Test User'),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('ব্যাকআপ নিন'), findsOneWidget);
+    expect(find.text('ওষুধ যোগ করুন'), findsOneWidget);
+    expect(find.text('ঢাকা, বাংলাদেশ'), findsNothing);
   });
 
   testWidgets('medicine form is responsive and uses time plus dosage', (

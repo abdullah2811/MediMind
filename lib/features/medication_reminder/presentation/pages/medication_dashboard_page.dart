@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../../../../core/localization/app_localization.dart';
+import '../../../../core/theme/app_theme.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
 import 'add_reminder_page.dart';
@@ -38,15 +40,21 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
         setState(() => _now = DateTime.now());
       }
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _syncAndRefresh();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startAutoSync());
   }
 
   @override
   void dispose() {
     _clockTimer?.cancel();
+    unawaited(widget.repository.stopAutoSync());
     super.dispose();
+  }
+
+  Future<void> _startAutoSync() async {
+    await widget.repository.startAutoSync(uid: widget.uid);
+    if (mounted) {
+      setState(_load);
+    }
   }
 
   void _load() {
@@ -54,9 +62,14 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
   }
 
   Future<void> _syncAndRefresh() async {
-    await widget.repository.syncFromCloud(uid: widget.uid);
-    if (mounted) {
-      setState(_load);
+    try {
+      await widget.repository.syncFromCloud(uid: widget.uid);
+    } catch (_) {
+      // Local reminders stay usable; automatic sync retries when online.
+    } finally {
+      if (mounted) {
+        setState(_load);
+      }
     }
   }
 
@@ -65,12 +78,20 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
   }
 
   Future<void> _backup() async {
-    await widget.repository.backupToCloud(uid: widget.uid);
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(context.tr('backup_complete'))));
-      setState(_load);
+    try {
+      await widget.repository.backupToCloud(uid: widget.uid);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr('backup_complete'))));
+        setState(_load);
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(context.tr('backup_waiting'))));
+      }
     }
   }
 
@@ -137,18 +158,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
     return '${hours.toString().padLeft(2, '0')}h ${minutes.toString().padLeft(2, '0')}m';
   }
 
-  String _formatClock() {
-    final hourOfPeriod = _now.hour % 12;
-    final hour = hourOfPeriod == 0 ? 12 : hourOfPeriod;
-    final minute = _now.minute.toString().padLeft(2, '0');
-    final period = _now.hour >= 12 ? 'PM' : 'AM';
-    return '$hour:$minute $period';
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FB),
+      backgroundColor: AppPalette.ivory,
       body: SafeArea(
         child: FutureBuilder<List<Medication>>(
           future: _medicationsFuture,
@@ -164,7 +177,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                   SliverAppBar(
                     floating: true,
                     pinned: true,
-                    backgroundColor: const Color(0xFFF4F7FB),
+                    backgroundColor: AppPalette.ivory,
                     elevation: 0,
                     title: const Text(
                       'MediMind',
@@ -187,9 +200,11 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                     sliver: SliverToBoxAdapter(
                       child: _HeroHeader(
-                        timeText: _formatClock(),
                         nextMedication: nextMedication,
                         countdownText: _formatCountdown(nextMedication),
+                        remaining: nextMedication == null
+                            ? null
+                            : _nextTime(nextMedication).difference(_now),
                       ),
                     ),
                   ),
@@ -217,17 +232,18 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                       ),
                     ),
                   ),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                    sliver: SliverToBoxAdapter(
-                      child: _ActionButtons(
-                        primaryLabel: context.tr('add_medicine'),
-                        secondaryLabel: context.tr('backup'),
-                        onPrimary: _openAddPage,
-                        onSecondary: _backup,
+                  if (medications.isNotEmpty)
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                      sliver: SliverToBoxAdapter(
+                        child: _ActionButtons(
+                          primaryLabel: context.tr('add_medicine'),
+                          secondaryLabel: context.tr('backup'),
+                          onPrimary: _openAddPage,
+                          onSecondary: _backup,
+                        ),
                       ),
                     ),
-                  ),
                   SliverPadding(
                     padding: const EdgeInsets.fromLTRB(16, 18, 16, 8),
                     sliver: SliverToBoxAdapter(
@@ -380,132 +396,196 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
 
 class _HeroHeader extends StatelessWidget {
   const _HeroHeader({
-    required this.timeText,
     required this.nextMedication,
     required this.countdownText,
+    required this.remaining,
   });
 
-  final String timeText;
   final Medication? nextMedication;
   final String countdownText;
+  final Duration? remaining;
 
   @override
   Widget build(BuildContext context) {
-    final details = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          nextMedication == null
-              ? context.tr('no_active_medicines')
-              : context.tr('next_medicine'),
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          nextMedication?.medicineName ?? context.tr('add_first_reminder'),
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 26,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          nextMedication == null
-              ? context.tr('create_first_reminder_hint')
-              : '${context.tr('due_in')} $countdownText',
-          style: const TextStyle(
-            color: Colors.white70,
-            fontSize: 15,
-            height: 1.35,
-          ),
-        ),
-      ],
-    );
-    final clock = Container(
-      width: 90,
-      height: 90,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: Colors.white.withValues(alpha: 0.16),
-        border: Border.all(color: Colors.white70, width: 4),
-      ),
-      child: Center(
-        child: Text(
-          nextMedication?.timeOfDay ?? '--:--',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 20,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ),
-    );
+    final remainingMinutes = remaining?.inMinutes ?? 0;
+    final dayFraction = nextMedication == null
+        ? 0.0
+        : (remainingMinutes / Duration.minutesPerDay).clamp(0.015, 1.0);
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF0F766E), Color(0xFF1D4ED8)],
+          colors: [AppPalette.aubergine, AppPalette.plum, AppPalette.persimmon],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: AppPalette.aubergine.withValues(alpha: 0.22),
+            blurRadius: 28,
+            offset: const Offset(0, 14),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          Row(
             children: [
-              const Icon(Icons.location_on_outlined, color: Colors.white),
-              Text(
-                context.tr('dhaka'),
-                style: const TextStyle(
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.medication_liquid_outlined,
                   color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
+                  size: 20,
                 ),
               ),
-              Text(
-                timeText,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.w700,
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  nextMedication == null
+                      ? context.tr('no_active_medicines')
+                      : context.tr('next_medicine'),
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 18),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              if (constraints.maxWidth < 430) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    details,
-                    const SizedBox(height: 16),
-                    Align(alignment: Alignment.centerRight, child: clock),
-                  ],
-                );
-              }
-              return Row(
-                children: [
-                  Expanded(child: details),
-                  const SizedBox(width: 14),
-                  clock,
-                ],
-              );
-            },
+          const SizedBox(height: 10),
+          Text(
+            nextMedication?.medicineName ?? context.tr('add_first_reminder'),
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 27,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            nextMedication == null
+                ? context.tr('create_first_reminder_hint')
+                : '${context.tr('due_in')} $countdownText',
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 15,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 132,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: CustomPaint(
+                    painter: _DayCyclePainter(progress: dayFraction),
+                  ),
+                ),
+                Positioned(
+                  left: 4,
+                  bottom: 0,
+                  child: Text(
+                    context.tr('now'),
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                Positioned(
+                  right: 2,
+                  bottom: 0,
+                  child: Text(
+                    nextMedication?.timeOfDay ?? '--:--',
+                    style: const TextStyle(
+                      fontFamily: 'Manrope',
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
+  }
+}
+
+class _DayCyclePainter extends CustomPainter {
+  const _DayCyclePainter({required this.progress});
+
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromCenter(
+      center: Offset(size.width / 2, size.height - 18),
+      width: size.width - 24,
+      height: (size.height - 34) * 2,
+    );
+    final basePaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.18)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 9
+      ..strokeCap = StrokeCap.round;
+    final progressPaint = Paint()
+      ..shader = const SweepGradient(
+        startAngle: math.pi,
+        endAngle: math.pi * 2,
+        colors: [AppPalette.saffron, Color(0xFFFFE0A0)],
+      ).createShader(rect)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 9
+      ..strokeCap = StrokeCap.round;
+
+    canvas.drawArc(rect, math.pi, math.pi, false, basePaint);
+    if (progress > 0) {
+      canvas.drawArc(rect, math.pi, math.pi * progress, false, progressPaint);
+      final markerAngle = math.pi + math.pi * progress;
+      final marker = Offset(
+        rect.center.dx + rect.width / 2 * math.cos(markerAngle),
+        rect.center.dy + rect.height / 2 * math.sin(markerAngle),
+      );
+      canvas.drawCircle(marker, 7, Paint()..color = Colors.white);
+      canvas.drawCircle(marker, 3.5, Paint()..color = AppPalette.saffron);
+    }
+
+    final sun = Offset(size.width / 2, 12);
+    canvas.drawCircle(
+      sun,
+      7,
+      Paint()..color = AppPalette.saffron.withValues(alpha: 0.95),
+    );
+    for (var i = 0; i < 8; i++) {
+      final angle = i * math.pi / 4;
+      canvas.drawLine(
+        Offset(sun.dx + 10 * math.cos(angle), sun.dy + 10 * math.sin(angle)),
+        Offset(sun.dx + 14 * math.cos(angle), sun.dy + 14 * math.sin(angle)),
+        Paint()
+          ..color = AppPalette.saffron.withValues(alpha: 0.75)
+          ..strokeWidth = 1.5
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DayCyclePainter oldDelegate) {
+    return oldDelegate.progress != progress;
   }
 }
 
@@ -601,21 +681,21 @@ class _MetricCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: const Color(0xFF0F766E)),
+            Icon(icon, color: AppPalette.persimmon),
             const SizedBox(height: 12),
             Text(
               value,
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 4),
-            Text(title, style: TextStyle(color: Colors.grey.shade700)),
+            Text(title, style: const TextStyle(color: AppPalette.muted)),
           ],
         ),
       ),
@@ -646,7 +726,7 @@ class _SectionTitle extends StatelessWidget {
         Text(
           trailing,
           style: TextStyle(
-            color: Colors.grey.shade700,
+            color: AppPalette.muted,
             fontWeight: FontWeight.w700,
           ),
         ),
@@ -666,7 +746,7 @@ class _EmptyState extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(22),
@@ -676,10 +756,14 @@ class _EmptyState extends StatelessWidget {
               width: 72,
               height: 72,
               decoration: BoxDecoration(
-                color: const Color(0xFFE8F0FE),
+                color: AppPalette.blush.withValues(alpha: 0.7),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Icon(Icons.medication_outlined, size: 36),
+              child: const Icon(
+                Icons.medication_outlined,
+                size: 36,
+                color: AppPalette.persimmon,
+              ),
             ),
             const SizedBox(height: 14),
             Text(
@@ -720,7 +804,7 @@ class _MedicineCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(24),
@@ -733,12 +817,12 @@ class _MedicineCard extends StatelessWidget {
                 width: 54,
                 height: 54,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE8F7F3),
+                  color: AppPalette.blush.withValues(alpha: 0.65),
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: Icon(
                   Icons.medication_outlined,
-                  color: const Color(0xFF0F766E),
+                  color: AppPalette.persimmon,
                 ),
               ),
               const SizedBox(width: 14),
@@ -758,7 +842,7 @@ class _MedicineCard extends StatelessWidget {
                       medication.dose.isEmpty
                           ? context.tr('dose_not_set')
                           : _localizedDoseSummary(context, medication),
-                      style: TextStyle(color: Colors.grey.shade800),
+                      style: const TextStyle(color: AppPalette.muted),
                     ),
                     const SizedBox(height: 6),
                     Wrap(
@@ -806,13 +890,13 @@ class _InfoChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
+        color: AppPalette.blush.withValues(alpha: 0.42),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 14, color: const Color(0xFF334155)),
+          Icon(icon, size: 14, color: AppPalette.aubergine),
           const SizedBox(width: 6),
           Text(
             label,

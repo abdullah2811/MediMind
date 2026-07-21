@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
+
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
 import '../datasources/medication_local_data_source.dart';
@@ -11,15 +15,22 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required MedicationRemoteDataSource remoteDataSource,
     required MedicationSyncService syncService,
     required MedicationNotificationService notificationService,
+    required Connectivity connectivity,
   }) : _localDataSource = localDataSource,
        _remoteDataSource = remoteDataSource,
        _syncService = syncService,
-       _notificationService = notificationService;
+       _notificationService = notificationService,
+       _connectivity = connectivity;
 
   final MedicationLocalDataSource _localDataSource;
   final MedicationRemoteDataSource _remoteDataSource;
   final MedicationSyncService _syncService;
   final MedicationNotificationService _notificationService;
+  final Connectivity _connectivity;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  Timer? _retryTimer;
+  String? _autoSyncUid;
+  bool _hasNetworkConnection = false;
 
   @override
   Future<void> add({
@@ -30,11 +41,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     if (medication.isActive) {
       await _notificationService.scheduleMedication(medication);
     }
-    _syncService.queuePush(
-      uid: uid,
-      medication: medication,
-      operation: SyncOperation.upsert,
-    );
+    _syncService.queueBackupAndSync(uid: uid);
   }
 
   @override
@@ -71,7 +78,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
 
   @override
   Future<void> syncFromCloud({required String uid}) async {
-    await _syncService.syncFromCloud(uid: uid);
+    await _syncService.backupAndSync(uid: uid);
   }
 
   @override
@@ -94,10 +101,49 @@ class MedicationRepositoryImpl implements MedicationRepository {
     if (medication.isActive) {
       await _notificationService.scheduleMedication(medication);
     }
-    _syncService.queuePush(
-      uid: uid,
-      medication: medication,
-      operation: SyncOperation.upsert,
-    );
+    _syncService.queueBackupAndSync(uid: uid);
+  }
+
+  @override
+  Future<void> startAutoSync({required String uid}) async {
+    await stopAutoSync();
+    _autoSyncUid = uid;
+    _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
+      results,
+    ) {
+      _hasNetworkConnection = _isConnected(results);
+      if (_hasNetworkConnection) {
+        _syncService.queueBackupAndSync(uid: uid);
+      }
+    });
+    _retryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_hasNetworkConnection && _autoSyncUid == uid) {
+        _syncService.queueBackupAndSync(uid: uid);
+      }
+    });
+
+    final current = await _connectivity.checkConnectivity();
+    _hasNetworkConnection = _isConnected(current);
+    if (_hasNetworkConnection) {
+      try {
+        await _syncService.backupAndSync(uid: uid);
+      } catch (_) {
+        // Local data is already durable. The listener/timer retries later.
+      }
+    }
+  }
+
+  @override
+  Future<void> stopAutoSync() async {
+    _autoSyncUid = null;
+    _hasNetworkConnection = false;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    await _connectivitySubscription?.cancel();
+    _connectivitySubscription = null;
+  }
+
+  bool _isConnected(List<ConnectivityResult> results) {
+    return results.any((result) => result != ConnectivityResult.none);
   }
 }

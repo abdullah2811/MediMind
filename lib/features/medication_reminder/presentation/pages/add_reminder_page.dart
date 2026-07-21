@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/localization/app_localization.dart';
+import '../../../../core/theme/app_theme.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
 
@@ -520,7 +521,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
                       height: 150,
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
+                        color: AppPalette.blush.withValues(alpha: 0.28),
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Text(
@@ -566,7 +567,7 @@ class _HeaderCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF0F766E), Color(0xFF2563EB)],
+          colors: [AppPalette.aubergine, AppPalette.persimmon],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -597,7 +598,7 @@ class _SectionCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -659,10 +660,10 @@ class _DoseRowEditor extends StatelessWidget {
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      color: const Color(0xFFF8FAFC),
+      color: AppPalette.blush.withValues(alpha: 0.24),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
-        side: const BorderSide(color: Color(0xFFE2E8F0)),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.16)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -673,7 +674,7 @@ class _DoseRowEditor extends StatelessWidget {
               children: [
                 CircleAvatar(
                   radius: 14,
-                  backgroundColor: const Color(0xFF0F766E),
+                  backgroundColor: AppPalette.persimmon,
                   child: Text(
                     '${index + 1}',
                     style: const TextStyle(color: Colors.white, fontSize: 12),

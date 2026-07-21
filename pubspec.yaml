@@ -47,6 +47,8 @@ dependencies:
   intl: ^0.20.2
   google_sign_in: ^6.3.0
   timezone: ^0.9.4
+  connectivity_plus: ^6.1.5
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
@@ -69,6 +71,18 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/fonts/Manrope-OFL.txt
+    - assets/fonts/NotoSansBengali-OFL.txt
+
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: assets/fonts/Manrope-Variable.ttf
+    - family: NotoSansBengali
+      fonts:
+        - asset: assets/fonts/NotoSansBengali-Variable.ttf
 
   # To add assets to your application, add an assets section, like this:
   # assets:

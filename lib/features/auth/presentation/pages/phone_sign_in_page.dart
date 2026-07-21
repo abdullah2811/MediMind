@@ -1,6 +1,8 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/link.dart';
 
 import '../../../../core/localization/app_localization.dart';
 import '../../domain/auth_repository.dart';
@@ -214,8 +216,54 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
               child: Text(context.tr('verify_and_sign_in')),
             ),
           ),
+          if (kIsWeb) ...[
+            const SizedBox(height: 24),
+            const _RecaptchaDisclosure(),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _RecaptchaDisclosure extends StatelessWidget {
+  const _RecaptchaDisclosure();
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11);
+    final linkStyle = style?.copyWith(
+      decoration: TextDecoration.underline,
+      fontWeight: FontWeight.w700,
+    );
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 3,
+      children: [
+        Text(
+          'This site is protected by reCAPTCHA and the Google',
+          style: style,
+        ),
+        Link(
+          uri: Uri.parse('https://policies.google.com/privacy'),
+          target: LinkTarget.blank,
+          builder: (context, followLink) => InkWell(
+            onTap: followLink,
+            child: Text('Privacy Policy', style: linkStyle),
+          ),
+        ),
+        Text('and', style: style),
+        Link(
+          uri: Uri.parse('https://policies.google.com/terms'),
+          target: LinkTarget.blank,
+          builder: (context, followLink) => InkWell(
+            onTap: followLink,
+            child: Text('Terms of Service', style: linkStyle),
+          ),
+        ),
+        Text('apply.', style: style),
+      ],
     );
   }
 }

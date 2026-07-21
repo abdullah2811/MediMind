@@ -8,4 +8,6 @@ abstract class MedicationRepository {
   Future<void> delete({required String uid, required String id});
   Future<void> syncFromCloud({required String uid});
   Future<void> backupToCloud({required String uid});
+  Future<void> startAutoSync({required String uid});
+  Future<void> stopAutoSync();
 }

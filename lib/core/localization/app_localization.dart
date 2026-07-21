@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/app_theme.dart';
+
 class AppLanguageController extends ValueNotifier<Locale> {
   AppLanguageController() : super(const Locale('bn'));
 
@@ -7,6 +9,10 @@ class AppLanguageController extends ValueNotifier<Locale> {
     value = value.languageCode == 'en'
         ? const Locale('bn')
         : const Locale('en');
+  }
+
+  void setLanguage(String languageCode) {
+    value = Locale(languageCode == 'en' ? 'en' : 'bn');
   }
 
   String get languageCode => value.languageCode;
@@ -44,11 +50,67 @@ class LanguageToggleButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final controller = AppLanguageScope.controllerOf(context);
-    return TextButton(
-      onPressed: controller.toggle,
-      child: Text(
-        controller.languageCode == 'en' ? 'বাংলা' : 'English',
-        style: const TextStyle(fontWeight: FontWeight.w800),
+    return Semantics(
+      label: 'Language',
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: AppPalette.blush.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: AppPalette.plum.withValues(alpha: 0.18)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _LanguageSegment(
+              label: 'বাংলা',
+              selected: controller.languageCode == 'bn',
+              onTap: () => controller.setLanguage('bn'),
+            ),
+            _LanguageSegment(
+              label: 'Eng',
+              selected: controller.languageCode == 'en',
+              onTap: () => controller.setLanguage('en'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LanguageSegment extends StatelessWidget {
+  const _LanguageSegment({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+        decoration: BoxDecoration(
+          color: selected ? AppPalette.aubergine : Colors.transparent,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: label == 'Eng' ? 'Manrope' : 'NotoSansBengali',
+            color: selected ? Colors.white : AppPalette.aubergine,
+            fontSize: 12,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
       ),
     );
   }
@@ -81,6 +143,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'add_medicine': 'Add medicine',
     'backup': 'Backup',
     'backup_complete': 'Backup complete.',
+    'backup_waiting': 'Saved on this device. Backup will retry when online.',
     'no_active_medicines': 'No medicines scheduled',
     'next_medicine': 'Next medicine',
     'add_first_reminder': 'Add your first medicine',
@@ -147,7 +210,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'ml': 'mL',
     'drop_unit': 'drop',
     'next': 'Next',
-    'dhaka': 'Dhaka, Bangladesh',
+    'now': 'Now',
     'dose_not_set': 'Dosage not set',
     'auth_failed': 'Authentication failed. Please try again.',
     'invalid_phone': 'Enter a valid Bangladesh mobile number.',
@@ -164,7 +227,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'expired_code': 'The verification code has expired. Request a new code.',
   },
   'bn': {
-    'app_name': 'মেডিমাইন্ড',
+    'app_name': 'MediMind',
     'tagline': 'পরিবারের ওষুধ ঠিক সময়ে মনে রাখার সহজ উপায়।',
     'choose_sign_in': 'যেভাবে প্রবেশ করতে চান',
     'phone_number': 'মোবাইল নম্বর',
@@ -189,6 +252,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'add_medicine': 'ওষুধ যোগ করুন',
     'backup': 'ব্যাকআপ নিন',
     'backup_complete': 'ব্যাকআপ সম্পন্ন হয়েছে।',
+    'backup_waiting': 'এই ডিভাইসে রাখা হয়েছে। ইন্টারনেট এলে ব্যাকআপ হয়ে যাবে।',
     'no_active_medicines': 'এখন কোনো ওষুধের সময় নেই',
     'next_medicine': 'পরের ওষুধ',
     'add_first_reminder': 'প্রথম ওষুধটি যোগ করুন',
@@ -255,7 +319,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'ml': 'মি.লি.',
     'drop_unit': 'ফোঁটা',
     'next': 'পরের সময়',
-    'dhaka': 'ঢাকা, বাংলাদেশ',
+    'now': 'এখন',
     'dose_not_set': 'খাওয়ার পরিমাণ দেওয়া হয়নি',
     'auth_failed': 'প্রবেশ করা যায়নি। আবার চেষ্টা করুন।',
     'invalid_phone': 'সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।',

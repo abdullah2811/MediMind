@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
@@ -8,6 +9,8 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'core/config/firebase_auth_environment.dart';
 import 'core/localization/app_localization.dart';
+import 'core/theme/app_theme.dart';
+import 'core/theme/app_licenses.dart';
 import 'firebase_options.dart';
 import 'features/auth/data/firebase_auth_repository.dart';
 import 'features/auth/domain/auth_repository.dart';
@@ -31,21 +34,22 @@ class MediMindApp extends StatefulWidget {
 
 class _MediMindAppState extends State<MediMindApp> {
   late final AppLanguageController _languageController;
+  late final MedicationRepository _medicationRepository;
+  late final AuthRepository _authenticationRepository;
 
   @override
   void initState() {
     super.initState();
     _languageController = AppLanguageController();
+    final notificationService = MedicationNotificationService();
+    _medicationRepository =
+        widget.repository ?? _buildDefaultRepository(notificationService);
+    _authenticationRepository =
+        widget.authRepository ?? _buildDefaultAuthRepository();
   }
 
   @override
   Widget build(BuildContext context) {
-    final notificationService = MedicationNotificationService();
-    final medicationRepository =
-        widget.repository ?? _buildDefaultRepository(notificationService);
-    final authenticationRepository =
-        widget.authRepository ?? _buildDefaultAuthRepository();
-
     return AppLanguageScope(
       controller: _languageController,
       child: ValueListenableBuilder<Locale>(
@@ -61,27 +65,10 @@ class _MediMindAppState extends State<MediMindApp> {
               GlobalWidgetsLocalizations.delegate,
               GlobalCupertinoLocalizations.delegate,
             ],
-            theme: ThemeData(
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: const Color(0xFF1C5D99),
-                brightness: Brightness.light,
-              ),
-              useMaterial3: true,
-              textTheme: const TextTheme(
-                headlineMedium: TextStyle(
-                  fontSize: 26,
-                  fontWeight: FontWeight.w700,
-                ),
-                titleLarge: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w700,
-                ),
-                bodyLarge: TextStyle(fontSize: 18),
-              ),
-            ),
+            theme: buildAppTheme(locale),
             home: AuthGate(
-              authRepository: authenticationRepository,
-              medicationRepository: medicationRepository,
+              authRepository: _authenticationRepository,
+              medicationRepository: _medicationRepository,
             ),
           );
         },
@@ -118,12 +105,14 @@ class _MediMindAppState extends State<MediMindApp> {
         notificationService: notificationService,
       ),
       notificationService: notificationService,
+      connectivity: Connectivity(),
     );
   }
 }
 
 Future<void> bootstrapApp() async {
   WidgetsFlutterBinding.ensureInitialized();
+  registerAppLicenses();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   await configureFirebaseAuthForEnvironment(FirebaseAuth.instance);
   await Hive.initFlutter();

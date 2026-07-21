@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../core/localization/app_localization.dart';
+import '../../../../core/theme/app_theme.dart';
 import '../../domain/auth_repository.dart';
 import 'phone_sign_in_page.dart';
 
@@ -54,22 +55,21 @@ class _SignInPageState extends State<SignInPage> {
               padding: const EdgeInsets.all(16),
               shrinkWrap: true,
               children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  alignment: WrapAlignment.center,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    Text(
-                      context.tr('app_name'),
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        color: const Color(0xFF153E75),
-                      ),
-                    ),
-                    const LanguageToggleButton(),
-                  ],
+                const Align(
+                  alignment: Alignment.centerRight,
+                  child: LanguageToggleButton(),
+                ),
+                const SizedBox(height: 28),
+                Text(
+                  'MediMind',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.headlineMedium?.copyWith(
+                    fontFamily: 'Manrope',
+                    fontSize: 34,
+                    letterSpacing: -1.2,
+                    fontWeight: FontWeight.w800,
+                    color: AppPalette.aubergine,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -130,13 +130,13 @@ class _MethodTile extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
       ),
       child: ListTile(
         onTap: onTap,
         leading: CircleAvatar(
-          backgroundColor: const Color(0xFFE8F0FE),
-          child: Icon(icon, color: const Color(0xFF153E75)),
+          backgroundColor: AppPalette.blush.withValues(alpha: 0.65),
+          child: Icon(icon, color: AppPalette.aubergine),
         ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
         subtitle: Text(subtitle),

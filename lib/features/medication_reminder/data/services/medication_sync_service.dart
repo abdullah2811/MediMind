@@ -28,6 +28,16 @@ class MedicationSyncService {
   final MedicationLocalDataSource _localDataSource;
   final MedicationRemoteDataSource _remoteDataSource;
   final MedicationNotificationService _notificationService;
+  Future<void>? _syncInFlight;
+
+  void queueBackupAndSync({required String uid}) {
+    unawaited(
+      backupAndSync(uid: uid).catchError((Object error, StackTrace stackTrace) {
+        debugPrint('Medication sync deferred: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }),
+    );
+  }
 
   void queuePush({
     required String uid,
@@ -51,6 +61,7 @@ class MedicationSyncService {
           );
         case SyncOperation.delete:
           await _remoteDataSource.deleteMedication(medication.id);
+          await _localDataSource.clearPendingDeletion(medication.id);
       }
     } catch (error, stackTrace) {
       debugPrint('Medication sync failed: $error');
@@ -73,21 +84,34 @@ class MedicationSyncService {
         ? fileName
         : 'medicine_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final ref = _storage.ref('medication_images/$userId/$safeFileName');
-    await ref.putData(fileBytes);
-    return ref.getDownloadURL();
+    await ref.putData(fileBytes).timeout(const Duration(seconds: 30));
+    return ref.getDownloadURL().timeout(const Duration(seconds: 20));
   }
 
   Future<void> backupLocalToCloud({required String uid}) async {
+    final pendingDeletionIds = await _localDataSource.getPendingDeletionIds();
+    for (final id in pendingDeletionIds) {
+      await _remoteDataSource
+          .deleteMedication(id)
+          .timeout(const Duration(seconds: 20));
+      await _localDataSource.clearPendingDeletion(id);
+    }
+
     final localMedications = await _localDataSource.getAll();
     for (final medication in localMedications) {
       final cloudImageUrl = await _uploadMedicationImageIfNeeded(
         userId: uid,
         medication: medication,
       );
-      await _remoteDataSource.upsertMedication(
-        uid: uid,
-        medication: medication.copyWith(backupImageUrl: cloudImageUrl),
+      final backedUpMedication = medication.copyWith(
+        backupImageUrl: cloudImageUrl,
       );
+      await _remoteDataSource
+          .upsertMedication(uid: uid, medication: backedUpMedication)
+          .timeout(const Duration(seconds: 20));
+      if (cloudImageUrl != medication.backupImageUrl) {
+        await _localDataSource.save(backedUpMedication);
+      }
     }
   }
 
@@ -115,6 +139,28 @@ class MedicationSyncService {
 
   Future<void> ensureSyncedOnLogin({required String uid}) async {
     await _firestore.enableNetwork();
+    await backupAndSync(uid: uid);
+  }
+
+  Future<void> backupAndSync({required String uid}) async {
+    final running = _syncInFlight;
+    if (running != null) {
+      return running;
+    }
+
+    late final Future<void> operation;
+    operation = _backupAndSync(uid).whenComplete(() {
+      if (identical(_syncInFlight, operation)) {
+        _syncInFlight = null;
+      }
+    });
+    _syncInFlight = operation;
+    return operation;
+  }
+
+  Future<void> _backupAndSync(String uid) async {
+    await _firestore.enableNetwork();
+    await backupLocalToCloud(uid: uid);
     await syncFromCloud(uid: uid);
   }
 }
