@@ -101,6 +101,9 @@ class Medication {
     this.mealScheduleEnabled = false,
     this.mealTimes = const <String>[],
     this.checkIns = const <MedicationCheckIn>[],
+    this.scheduleFrequency = 'daily',
+    this.customIntervalDays = 1,
+    DateTime? scheduleStartDate,
     this.medicineType = 'tablet',
     this.powerValue,
     this.powerUnit = 'mg',
@@ -113,7 +116,7 @@ class Medication {
     this.backupImageUrl,
     required this.isActive,
     required this.updatedAt,
-  });
+  }) : scheduleStartDate = scheduleStartDate ?? updatedAt;
 
   final String id;
   final String medicineName;
@@ -135,6 +138,9 @@ class Medication {
   final bool mealScheduleEnabled;
   final List<String> mealTimes;
   final List<MedicationCheckIn> checkIns;
+  final String scheduleFrequency;
+  final int customIntervalDays;
+  final DateTime scheduleStartDate;
   final String? notes;
   final bool isActive;
   final DateTime updatedAt;
@@ -172,6 +178,29 @@ class Medication {
     return null;
   }
 
+  int get repeatIntervalDays {
+    return switch (scheduleFrequency) {
+      'weekly' => 7,
+      'every15Days' => 15,
+      'custom' => customIntervalDays.clamp(1, 365),
+      _ => 1,
+    };
+  }
+
+  bool occursOnDate(DateTime date) {
+    final localStart = scheduleStartDate.toLocal();
+    final start = DateTime(localStart.year, localStart.month, localStart.day);
+    final candidate = DateTime(date.year, date.month, date.day);
+    if (candidate.isBefore(start)) {
+      return false;
+    }
+    if (scheduleFrequency == 'monthly') {
+      final lastDay = DateTime(candidate.year, candidate.month + 1, 0).day;
+      return candidate.day == localStart.day.clamp(1, lastDay);
+    }
+    return candidate.difference(start).inDays % repeatIntervalDays == 0;
+  }
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'id': id,
     'medicineName': medicineName,
@@ -193,6 +222,9 @@ class Medication {
     'mealScheduleEnabled': mealScheduleEnabled,
     'mealTimes': mealTimes,
     'checkIns': checkIns.map((item) => item.toJson()).toList(growable: false),
+    'scheduleFrequency': scheduleFrequency,
+    'customIntervalDays': customIntervalDays,
+    'scheduleStartDate': scheduleStartDate.toIso8601String(),
     'notes': notes,
     'isActive': isActive,
     'updatedAt': updatedAt.toIso8601String(),
@@ -219,6 +251,9 @@ class Medication {
     mealScheduleEnabled: json['mealScheduleEnabled'] as bool? ?? false,
     mealTimes: _stringList(json['mealTimes']),
     checkIns: _checkInList(json['checkIns']),
+    scheduleFrequency: json['scheduleFrequency'] as String? ?? 'daily',
+    customIntervalDays: (json['customIntervalDays'] as num?)?.toInt() ?? 1,
+    scheduleStartDate: _dateTimeOrNull(json['scheduleStartDate']),
     notes: json['notes'] as String?,
     isActive: true,
     updatedAt: DateTime.parse(json['updatedAt'] as String),
@@ -246,6 +281,9 @@ class Medication {
     'mealScheduleEnabled': mealScheduleEnabled,
     'mealTimes': mealTimes,
     'checkIns': checkIns.map((item) => item.toJson()).toList(growable: false),
+    'scheduleFrequency': scheduleFrequency,
+    'customIntervalDays': customIntervalDays,
+    'scheduleStartDate': Timestamp.fromDate(scheduleStartDate),
     'imagePath': _cloudImageValue(imageUrlOverride),
     'notes': notes,
     'isActive': true,
@@ -277,6 +315,9 @@ class Medication {
       mealScheduleEnabled: data['mealScheduleEnabled'] as bool? ?? false,
       mealTimes: _stringList(data['mealTimes']),
       checkIns: _checkInList(data['checkIns']),
+      scheduleFrequency: data['scheduleFrequency'] as String? ?? 'daily',
+      customIntervalDays: (data['customIntervalDays'] as num?)?.toInt() ?? 1,
+      scheduleStartDate: (data['scheduleStartDate'] as Timestamp?)?.toDate(),
       notes: data['notes'] as String?,
       isActive: true,
       updatedAt: (data['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -304,6 +345,9 @@ class Medication {
     bool? mealScheduleEnabled,
     List<String>? mealTimes,
     List<MedicationCheckIn>? checkIns,
+    String? scheduleFrequency,
+    int? customIntervalDays,
+    DateTime? scheduleStartDate,
     String? notes,
     bool? isActive,
     DateTime? updatedAt,
@@ -329,6 +373,9 @@ class Medication {
       mealScheduleEnabled: mealScheduleEnabled ?? this.mealScheduleEnabled,
       mealTimes: mealTimes ?? this.mealTimes,
       checkIns: checkIns ?? this.checkIns,
+      scheduleFrequency: scheduleFrequency ?? this.scheduleFrequency,
+      customIntervalDays: customIntervalDays ?? this.customIntervalDays,
+      scheduleStartDate: scheduleStartDate ?? this.scheduleStartDate,
       notes: notes ?? this.notes,
       isActive: true,
       updatedAt: updatedAt ?? this.updatedAt,

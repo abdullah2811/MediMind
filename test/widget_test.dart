@@ -198,7 +198,7 @@ void main() {
       timeOfDay: '09:00',
       mealOffset: 0,
       isActive: true,
-      updatedAt: DateTime(2026, 7, 22),
+      updatedAt: DateTime.now(),
     );
     await tester.pumpWidget(
       MediMindApp(
@@ -260,7 +260,22 @@ void main() {
           .abs(),
       lessThan(1),
     );
-    await tester.drag(find.byType(ListView), const Offset(0, -700));
+    await tester.drag(find.byType(ListView), const Offset(0, -500));
+    await tester.pumpAndSettle();
+    expect(find.text('কত দিন পরপর খাবেন'), findsOneWidget);
+    expect(find.text('প্রতিদিন'), findsOneWidget);
+    await tester.tap(find.text('প্রতিদিন'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('নিজের মতো দিনের ব্যবধান').last);
+    await tester.pumpAndSettle();
+    expect(find.text('কত দিন পরপর'), findsOneWidget);
+    expect(
+      tester
+          .widgetList<TextField>(find.byType(TextField))
+          .any((field) => field.controller?.text == '2'),
+      isTrue,
+    );
+    await tester.drag(find.byType(ListView), const Offset(0, -500));
     await tester.pumpAndSettle();
     expect(find.text('খাবারের সময়ও মনে করিয়ে দিন'), findsOneWidget);
     await tester.tap(find.byType(SwitchListTile));
@@ -309,7 +324,7 @@ void main() {
           timeOfDay: '23:59',
           mealOffset: -20,
           isActive: true,
-          updatedAt: DateTime(2026, 7, 22),
+          updatedAt: DateTime.now(),
         ),
       ],
     );

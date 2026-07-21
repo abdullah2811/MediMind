@@ -1,5 +1,4 @@
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz;
@@ -8,9 +7,9 @@ import 'package:timezone/timezone.dart' as tz;
 import '../../domain/models/medication.dart';
 
 class MedicationReminderPlanItem {
-  MedicationReminderPlanItem({required this.timeOfDay});
+  MedicationReminderPlanItem({required this.scheduledAt});
 
-  final String timeOfDay;
+  final DateTime scheduledAt;
   final List<({Medication medication, MedicationDose dose})> doses = [];
   final List<Medication> meals = [];
 
@@ -19,42 +18,57 @@ class MedicationReminderPlanItem {
 }
 
 List<MedicationReminderPlanItem> buildMedicationReminderPlan(
-  List<Medication> medications,
-) {
-  final events = <String, MedicationReminderPlanItem>{};
+  List<Medication> medications, {
+  DateTime? from,
+  int horizonDays = 365,
+  int maxEvents = 360,
+}) {
+  final now = from ?? DateTime.now();
+  final firstDay = DateTime(now.year, now.month, now.day);
+  final events = <int, MedicationReminderPlanItem>{};
 
-  MedicationReminderPlanItem eventAt(String time) {
+  MedicationReminderPlanItem eventAt(DateTime time) {
+    final minuteKey =
+        time.millisecondsSinceEpoch ~/ Duration.millisecondsPerMinute;
     return events.putIfAbsent(
-      time,
-      () => MedicationReminderPlanItem(timeOfDay: time),
+      minuteKey,
+      () => MedicationReminderPlanItem(scheduledAt: time),
     );
   }
 
   for (final medication in medications.where((item) => item.isActive)) {
-    final doses = medication.effectiveDoses;
-    for (var i = 0; i < doses.length; i++) {
-      final dose = doses[i];
-      if (dose.timeOfDay.isEmpty) {
+    for (var dayOffset = 0; dayOffset <= horizonDays; dayOffset++) {
+      final day = firstDay.add(Duration(days: dayOffset));
+      if (!medication.occursOnDate(day)) {
         continue;
       }
-      final doseTime = _canonicalClockTime(dose.timeOfDay);
-      eventAt(doseTime).doses.add((medication: medication, dose: dose));
+      for (final dose in medication.effectiveDoses) {
+        if (dose.timeOfDay.isEmpty) {
+          continue;
+        }
+        final doseTime = _dateAtClockTime(day, dose.timeOfDay);
+        if (doseTime.isAfter(now)) {
+          eventAt(doseTime).doses.add((medication: medication, dose: dose));
+        }
 
-      if (medication.mealScheduleEnabled) {
-        final mealTime = i < medication.mealTimes.length
-            ? medication.mealTimes[i]
-            : calculateMealTime(dose.timeOfDay, medication.mealOffset);
-        final mealEvent = eventAt(_canonicalClockTime(mealTime));
-        if (!mealEvent.meals.any((item) => item.id == medication.id)) {
-          mealEvent.meals.add(medication);
+        if (medication.mealScheduleEnabled) {
+          final mealTime = doseTime.subtract(
+            Duration(minutes: medication.mealOffset),
+          );
+          if (mealTime.isAfter(now)) {
+            final mealEvent = eventAt(mealTime);
+            if (!mealEvent.meals.any((item) => item.id == medication.id)) {
+              mealEvent.meals.add(medication);
+            }
+          }
         }
       }
     }
   }
 
   final plan = events.values.toList(growable: false)
-    ..sort((left, right) => left.timeOfDay.compareTo(right.timeOfDay));
-  return plan;
+    ..sort((left, right) => left.scheduledAt.compareTo(right.scheduledAt));
+  return plan.take(maxEvents).toList(growable: false);
 }
 
 String _canonicalClockTime(String value) {
@@ -63,6 +77,17 @@ String _canonicalClockTime(String value) {
   final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
   return '${hour.clamp(0, 23).toString().padLeft(2, '0')}:'
       '${minute.clamp(0, 59).toString().padLeft(2, '0')}';
+}
+
+DateTime _dateAtClockTime(DateTime date, String time) {
+  final canonical = _canonicalClockTime(time).split(':');
+  return DateTime(
+    date.year,
+    date.month,
+    date.day,
+    int.parse(canonical[0]),
+    int.parse(canonical[1]),
+  );
 }
 
 class MedicationNotificationService {
@@ -119,23 +144,28 @@ class MedicationNotificationService {
     await initialize();
     await _plugin.cancelAll();
 
-    for (final event in buildMedicationReminderPlan(medications)) {
-      final trigger = _nextInstanceOf(_parseTimeOfDay(event.timeOfDay));
+    final maxEvents = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+        ? 60
+        : 360;
+    for (final event in buildMedicationReminderPlan(
+      medications,
+      maxEvents: maxEvents,
+    )) {
+      final trigger = tz.TZDateTime.from(event.scheduledAt, tz.local);
       final content = _notificationContent(event);
       final details = _notificationDetails(content.title, content.body);
       await _plugin.zonedSchedule(
-        _notificationId(event.timeOfDay),
+        _notificationId(event.scheduledAt),
         content.title,
         content.body,
         trigger,
         details,
-        payload: event.timeOfDay,
+        payload: event.scheduledAt.toIso8601String(),
         androidScheduleMode: _canScheduleExact
             ? AndroidScheduleMode.exactAllowWhileIdle
             : AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation:
             UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: DateTimeComponents.time,
       );
     }
   }
@@ -200,7 +230,10 @@ class MedicationNotificationService {
       ...event.doses.map((item) => item.medication),
       ...event.meals,
     ].every((item) => item.languageCode == 'bn');
-    final time = _format12Hour(event.timeOfDay);
+    final time = _format12Hour(
+      '${event.scheduledAt.hour.toString().padLeft(2, '0')}:'
+      '${event.scheduledAt.minute.toString().padLeft(2, '0')}',
+    );
     final doseText = event.doses
         .map((item) {
           final value = item.dose.dosageValue.trim();
@@ -279,24 +312,9 @@ class MedicationNotificationService {
     return TimeOfDay(hour: hour, minute: minute);
   }
 
-  tz.TZDateTime _nextInstanceOf(TimeOfDay timeOfDay) {
-    final now = tz.TZDateTime.now(tz.local);
-    var scheduled = tz.TZDateTime(
-      tz.local,
-      now.year,
-      now.month,
-      now.day,
-      timeOfDay.hour,
-      timeOfDay.minute,
-    );
-    if (!scheduled.isAfter(now)) {
-      scheduled = scheduled.add(const Duration(days: 1));
-    }
-    return scheduled;
-  }
-
-  int _notificationId(String timeOfDay) {
-    final time = _parseTimeOfDay(timeOfDay);
-    return 310000 + time.hour * 60 + time.minute;
+  int _notificationId(DateTime scheduledAt) {
+    return (scheduledAt.millisecondsSinceEpoch ~/
+            Duration.millisecondsPerMinute) &
+        0x7fffffff;
   }
 }

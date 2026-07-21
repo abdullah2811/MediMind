@@ -16,16 +16,18 @@ The application currently targets Android, iOS, and the web.
 - Medicine type selection: tablet, capsule, syrup, drop, or insulin.
 - Medicine strength entry with units such as mg, g, and mcg.
 - Multiple daily medicine times, each with its own dosage.
+- Repeat schedules for daily, weekly, every 15 days, monthly, or a custom
+  interval from 1 to 365 days.
 - Dosage units derived automatically from the medicine type.
 - Optional meal reminders calculated from the medicine reminder time.
 - Custom before-meal and after-meal offsets, defaulting to 20 minutes.
 - Medicine and meal taken/not-taken tracking, including the actual time and
   whether a late dose was taken with food.
 - Optional medicine photos.
-- High-priority daily local notifications in the language used when the
+- High-priority local notifications in the language used when the
   medicine was saved.
 - Collision-safe reminder planning that merges events scheduled for the same
-  clock minute.
+  minute and rejects contradictory nearby meal anchors.
 - A dashboard showing the next medicine and a dynamic 24-hour day-cycle arc.
 - Local-first storage using Hive.
 - Automatic Firebase backup after medicines are added or updated.
@@ -339,6 +341,8 @@ Each medicine can include:
 - Optional photo.
 - One or more medicine reminder times.
 - A dosage value for every reminder time.
+- A repeat schedule: daily, weekly, every 15 days, monthly, or a custom number
+  of days.
 - An optional meal-time relationship.
 
 Dosage units are selected automatically:
@@ -361,6 +365,19 @@ Meal times are calculated from the medicine time:
 | 20 minutes before a meal | Medicine at 09:00, meal at 09:20 |
 | With the meal | Medicine at 09:00, meal at 09:00 |
 | 20 minutes after a meal | Medicine at 09:00, meal at 08:40 |
+
+Meal-linked reminders within the same one-hour meal window must resolve to one
+meal time. Exact matches are accepted and combined into one meal notification.
+Contradictory times are rejected before saving, and the form shows the corrected
+medicine time. For example, if an existing 09:00 PM medicine is 20 minutes
+before a 09:20 PM meal, a new medicine taken 30 minutes after that meal must be
+set to 09:50 PM. A proposed 09:30 PM time would imply a conflicting 09:00 PM
+meal and is therefore not saved.
+
+Monthly schedules preserve the starting day where possible and use the final
+day of shorter months. Custom intervals accept whole numbers from 1 through
+365. Reminder occurrences are stored locally as part of the medicine record;
+Firebase remains the backup rather than the source of truth.
 
 Notifications use the `Asia/Dhaka` time zone. Android users may be asked to
 allow notifications, exact alarms, and full-screen alarms. Scheduled Android
@@ -441,7 +458,8 @@ The test suite covers:
 - Bangladesh phone-number normalization.
 - Debug and release Firebase test-mode safeguards.
 - Medication serialization and legacy-data compatibility.
-- Meal-time calculation.
+- All recurrence rules and date-specific notification planning.
+- Meal-time calculation and contradictory meal-window prevention.
 - Offline deletion persistence.
 - Bengali-first login and language switching.
 - Empty and non-empty dashboard button states.

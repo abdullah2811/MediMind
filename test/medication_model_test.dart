@@ -68,5 +68,39 @@ void main() {
     expect(restored.isActive, isTrue);
     expect(restored.effectiveDoses.single.timeOfDay, '21:00');
     expect(restored.effectiveDoses.single.dosageValue, '1 tablet');
+    expect(restored.scheduleFrequency, 'daily');
+    expect(restored.occursOnDate(DateTime(2026, 7, 21)), isTrue);
+  });
+
+  test('all supported recurrence rules calculate their dates correctly', () {
+    Medication scheduled(String frequency, {int customDays = 1}) => Medication(
+      id: frequency,
+      medicineName: frequency,
+      dose: '1 pill',
+      durationDays: 0,
+      timeOfDay: '09:00',
+      mealOffset: 0,
+      scheduleFrequency: frequency,
+      customIntervalDays: customDays,
+      scheduleStartDate: DateTime(2026, 1, 31),
+      isActive: true,
+      updatedAt: DateTime(2026, 1, 31),
+    );
+
+    expect(scheduled('daily').occursOnDate(DateTime(2026, 2, 1)), isTrue);
+    expect(scheduled('weekly').occursOnDate(DateTime(2026, 2, 7)), isTrue);
+    expect(
+      scheduled('every15Days').occursOnDate(DateTime(2026, 2, 15)),
+      isTrue,
+    );
+    expect(scheduled('monthly').occursOnDate(DateTime(2026, 2, 28)), isTrue);
+    expect(
+      scheduled('custom', customDays: 3).occursOnDate(DateTime(2026, 2, 3)),
+      isTrue,
+    );
+    expect(
+      scheduled('custom', customDays: 3).occursOnDate(DateTime(2026, 2, 2)),
+      isFalse,
+    );
   });
 }

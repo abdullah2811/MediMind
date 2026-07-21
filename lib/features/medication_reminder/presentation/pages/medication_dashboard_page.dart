@@ -308,27 +308,29 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
         .map((dose) => dose.timeOfDay)
         .where((time) => time.isNotEmpty)
         .toList(growable: false);
-    final candidates =
-        (times.isEmpty ? <String>[medication.timeOfDay] : times)
-            .map((time) {
-              final parts = time.split(':');
-              final hour = int.tryParse(parts.first) ?? 0;
-              final minute = parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0;
-              var next = DateTime(
-                _now.year,
-                _now.month,
-                _now.day,
-                hour,
-                minute,
-              );
-              if (next.isBefore(_now)) {
-                next = next.add(const Duration(days: 1));
-              }
-              return next;
-            })
-            .toList(growable: false)
-          ..sort();
-    return candidates.first;
+    final clockTimes = times.isEmpty ? <String>[medication.timeOfDay] : times;
+    for (var dayOffset = 0; dayOffset <= 366; dayOffset++) {
+      final day = DateTime(_now.year, _now.month, _now.day + dayOffset);
+      if (!medication.occursOnDate(day)) {
+        continue;
+      }
+      final candidates =
+          clockTimes
+              .map((time) => _dateAtDashboardTime(day, time))
+              .where((time) => !time.isBefore(_now))
+              .toList(growable: false)
+            ..sort();
+      if (candidates.isNotEmpty) {
+        return candidates.first;
+      }
+    }
+
+    // Custom intervals are capped at 365 days, so this is only a defensive
+    // fallback for malformed legacy records.
+    return _dateAtDashboardTime(
+      DateTime(_now.year, _now.month, _now.day + 1),
+      clockTimes.first,
+    );
   }
 
   DateTime _trackingTime(Medication medication) {
@@ -340,22 +342,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
       return _nextTime(medication);
     }
 
-    final candidates = <DateTime>[];
-    for (final dayOffset in const <int>[-1, 0, 1]) {
-      final day = _now.add(Duration(days: dayOffset));
-      for (final time in times) {
-        final parts = time.split(':');
-        candidates.add(
-          DateTime(
-            day.year,
-            day.month,
-            day.day,
-            int.tryParse(parts.first) ?? 0,
-            parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0,
-          ),
-        );
-      }
-    }
+    final today = DateTime(_now.year, _now.month, _now.day);
+    final candidates = times
+        .map((time) => _dateAtDashboardTime(today, time))
+        .toList(growable: false);
     candidates.sort((left, right) {
       final leftDistance = left.difference(_now).inMinutes.abs();
       final rightDistance = right.difference(_now).inMinutes.abs();
@@ -386,6 +376,9 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
           future: _medicationsFuture,
           builder: (context, snapshot) {
             final medications = snapshot.data ?? const <Medication>[];
+            final todayMedications = medications
+                .where((medication) => medication.occursOnDate(_now))
+                .toList(growable: false);
             final nextMedication = _nextMedication(medications);
 
             return RefreshIndicator(
@@ -433,7 +426,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                         cards: [
                           _MetricCard(
                             title: context.tr('today'),
-                            value: '${medications.length}',
+                            value: '${todayMedications.length}',
                             icon: Icons.medication_outlined,
                           ),
                           _MetricCard(
@@ -468,7 +461,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                       child: _SectionTitle(
                         title: context.tr('dashboard_today'),
                         trailing:
-                            '${medications.length} ${context.tr('dashboard_items')}',
+                            '${todayMedications.length} ${context.tr('dashboard_items')}',
                       ),
                     ),
                   ),
@@ -483,12 +476,17 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                         child: _EmptyState(onAdd: _openAddPage),
                       ),
                     )
+                  else if (todayMedications.isEmpty)
+                    const SliverPadding(
+                      padding: EdgeInsets.symmetric(horizontal: 16),
+                      sliver: SliverToBoxAdapter(child: _NoMedicineToday()),
+                    )
                   else
                     SliverPadding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                       sliver: SliverList.separated(
                         itemBuilder: (context, index) {
-                          final medication = medications[index];
+                          final medication = todayMedications[index];
                           final nextTime = _nextTime(medication);
                           final trackingTime = _trackingTime(medication);
                           final checkIn = medication.checkInFor(
@@ -520,7 +518,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                         },
                         separatorBuilder: (context, index) =>
                             const SizedBox(height: 12),
-                        itemCount: medications.length,
+                        itemCount: todayMedications.length,
                       ),
                     ),
                 ],
@@ -571,6 +569,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                   _parseDashboardTime(medication.timeOfDay),
                   alwaysUse24HourFormat: false,
                 ),
+              ),
+              _DetailLine(
+                label: context.tr('schedule'),
+                value: _localizedSchedule(context, medication),
               ),
               if ((medication.formula ?? '').isNotEmpty)
                 _DetailLine(
@@ -1018,6 +1020,34 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
+class _NoMedicineToday extends StatelessWidget {
+  const _NoMedicineToday();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.event_available_outlined,
+              color: AppPalette.persimmon,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(context.tr('no_medicine_today'))),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _MedicineCard extends StatelessWidget {
   const _MedicineCard({
     required this.medication,
@@ -1095,6 +1125,10 @@ class _MedicineCard extends StatelessWidget {
                               '${context.tr('next')}: '
                               '${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(nextTime), alwaysUse24HourFormat: false)}',
                           icon: Icons.schedule,
+                        ),
+                        _InfoChip(
+                          label: _localizedSchedule(context, medication),
+                          icon: Icons.event_repeat_outlined,
                         ),
                         if (medication.powerLabel.isNotEmpty)
                           _InfoChip(
@@ -1309,6 +1343,22 @@ String _localizedDoseSummary(BuildContext context, Medication medication) {
         return '$displayTime — ${dose.dosageValue} $unit';
       })
       .join(' • ');
+}
+
+String _localizedSchedule(BuildContext context, Medication medication) {
+  if (medication.scheduleFrequency != 'custom') {
+    return context.tr(medication.scheduleFrequency);
+  }
+  final days = medication.customIntervalDays.clamp(1, 365);
+  final isBangla = AppLanguageScope.controllerOf(context).languageCode == 'bn';
+  return isBangla
+      ? '${context.tr('every_n_days')} $days ${context.tr('days')} পরপর'
+      : '${context.tr('every_n_days')} $days ${context.tr('days')}';
+}
+
+DateTime _dateAtDashboardTime(DateTime date, String value) {
+  final time = _parseDashboardTime(value);
+  return DateTime(date.year, date.month, date.day, time.hour, time.minute);
 }
 
 TimeOfDay _parseDashboardTime(String value) {

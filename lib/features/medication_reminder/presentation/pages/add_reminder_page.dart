@@ -8,6 +8,7 @@ import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
+import '../../domain/services/meal_timing_validator.dart';
 
 class AddReminderPage extends StatefulWidget {
   const AddReminderPage({
@@ -32,20 +33,24 @@ class _AddReminderPageState extends State<AddReminderPage> {
   final _companyController = TextEditingController();
   final _notesController = TextEditingController();
   final _mealMinutesController = TextEditingController(text: '20');
+  final _customIntervalController = TextEditingController(text: '2');
   final _imagePicker = ImagePicker();
 
   String _medicineType = 'tablet';
   String _powerUnit = 'mg';
   String _mealRelation = 'before';
+  String _scheduleFrequency = 'daily';
   bool _mealScheduleEnabled = false;
   bool _busy = false;
   Uint8List? _imageBytes;
   String? _imagePath;
   late List<_DoseRow> _doseRows;
+  late Future<List<Medication>> _existingMedicationsFuture;
 
   @override
   void initState() {
     super.initState();
+    _existingMedicationsFuture = widget.repository.getAll(uid: widget.uid);
     final medication = widget.existingMedication;
     _doseRows = <_DoseRow>[_DoseRow(time: TimeOfDay.now())];
     if (medication != null) {
@@ -70,6 +75,8 @@ class _AddReminderPageState extends State<AddReminderPage> {
         _mealRelation = 'with';
       }
       _mealScheduleEnabled = medication.mealScheduleEnabled;
+      _scheduleFrequency = medication.scheduleFrequency;
+      _customIntervalController.text = medication.customIntervalDays.toString();
       _imagePath = medication.imagePath;
       _doseRows = _rowsFromMedication(medication);
     }
@@ -83,6 +90,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
     _companyController.dispose();
     _notesController.dispose();
     _mealMinutesController.dispose();
+    _customIntervalController.dispose();
     for (final row in _doseRows) {
       row.dispose();
     }
@@ -224,6 +232,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
   }
 
   Future<void> _saveReminder() async {
+    final languageCode = AppLanguageScope.controllerOf(context).languageCode;
     if (_medicineController.text.trim().isEmpty) {
       _showMessage(context.tr('medicine_name_required_error'));
       return;
@@ -237,6 +246,40 @@ class _AddReminderPageState extends State<AddReminderPage> {
       _showMessage(context.tr('dose_line_required_error'));
       return;
     }
+    if (doses.map((dose) => dose.timeOfDay).toSet().length != doses.length) {
+      _showMessage(context.tr('duplicate_dose_time_error'));
+      return;
+    }
+    if (_scheduleFrequency == 'custom') {
+      final customDays = int.tryParse(_customIntervalController.text.trim());
+      if (customDays == null || customDays < 1 || customDays > 365) {
+        _showMessage(context.tr('custom_days_error'));
+        return;
+      }
+    }
+    if (_mealScheduleEnabled && _mealRelation != 'with') {
+      final minutes = int.tryParse(_mealMinutesController.text.trim());
+      if (minutes == null || minutes < 1 || minutes > 720) {
+        _showMessage(context.tr('meal_minutes_error'));
+        return;
+      }
+    }
+
+    if (_mealScheduleEnabled) {
+      final existingMedications = await _existingMedicationsFuture;
+      final conflict = findMealTimingConflict(
+        newDoseTimes: doses.map((dose) => dose.timeOfDay).toList(),
+        newMealOffset: _mealOffset,
+        existingMedications: existingMedications,
+        excludedMedicationId: widget.existingMedication?.id,
+      );
+      if (conflict != null) {
+        if (mounted) {
+          await _showMealConflict(conflict);
+        }
+        return;
+      }
+    }
 
     setState(() => _busy = true);
     try {
@@ -249,7 +292,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
         medicineType: _medicineType,
         powerValue: _powerController.text.trim(),
         powerUnit: _powerUnit,
-        languageCode: AppLanguageScope.controllerOf(context).languageCode,
+        languageCode: languageCode,
         formula: _emptyToNull(_formulaController.text),
         companyName: _emptyToNull(_companyController.text),
         imagePath: _imagePath ?? existing?.imagePath,
@@ -270,6 +313,10 @@ class _AddReminderPageState extends State<AddReminderPage> {
                   .toList(growable: false)
             : const <String>[],
         checkIns: existing?.checkIns ?? const <MedicationCheckIn>[],
+        scheduleFrequency: _scheduleFrequency,
+        customIntervalDays:
+            int.tryParse(_customIntervalController.text.trim()) ?? 1,
+        scheduleStartDate: existing?.scheduleStartDate ?? now,
         notes: _emptyToNull(_notesController.text),
         isActive: true,
         updatedAt: now,
@@ -303,6 +350,45 @@ class _AddReminderPageState extends State<AddReminderPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _showMealConflict(MealTimingConflict conflict) {
+    final requested = _displayTime(_parseTime(conflict.requestedMealTime));
+    final existing = _displayTime(_parseTime(conflict.existingMealTime));
+    final suggested = _displayTime(_parseTime(conflict.suggestedMedicineTime));
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.tr('meal_timing_conflict_title')),
+        content: Text(
+          '${context.tr('meal_timing_conflict_requested')} $requested. '
+          '${context.tr('meal_timing_conflict_existing')} $existing. '
+          '${context.tr('meal_timing_conflict_fix')} $suggested.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.tr('understood')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.tr('use_suggested_time')),
+          ),
+        ],
+      ),
+    ).then((useSuggestedTime) {
+      if (useSuggestedTime != true || !mounted) {
+        return;
+      }
+      final rowIndex = _doseRows.indexWhere(
+        (row) => _canonicalTime(row.time) == conflict.requestedMedicineTime,
+      );
+      if (rowIndex >= 0) {
+        setState(() {
+          _doseRows[rowIndex].time = _parseTime(conflict.suggestedMedicineTime);
+        });
+      }
+    });
   }
 
   @override
@@ -476,6 +562,48 @@ class _AddReminderPageState extends State<AddReminderPage> {
                     ),
                   );
                 }),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _SectionCard(
+              title: context.tr('repeat_schedule'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: _scheduleFrequency,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: context.tr('repeat_medicine'),
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: _scheduleFrequencies
+                        .map(
+                          (frequency) => DropdownMenuItem(
+                            value: frequency,
+                            child: Text(context.tr(frequency)),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _scheduleFrequency = value);
+                      }
+                    },
+                  ),
+                  if (_scheduleFrequency == 'custom') ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _customIntervalController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: context.tr('custom_repeat_days'),
+                        suffixText: context.tr('days'),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             const SizedBox(height: 16),
@@ -807,3 +935,11 @@ const List<String> _medicineTypes = <String>[
 ];
 
 const List<String> _powerUnits = <String>['mg', 'g', 'mcg', 'units/ml'];
+
+const List<String> _scheduleFrequencies = <String>[
+  'daily',
+  'weekly',
+  'every15Days',
+  'monthly',
+  'custom',
+];
