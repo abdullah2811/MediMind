@@ -58,6 +58,32 @@ class FirebaseAuthRepository implements AuthRepository {
   }
 
   @override
+  Future<AppUser> signInWithEmailAndPassword({
+    required String email,
+    required String password,
+  }) async {
+    final credential = await _auth.signInWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+    return _mapCredentialUser(credential);
+  }
+
+  @override
+  Future<AppUser> signUpWithEmailAndPassword({
+    required String email,
+    required String password,
+    required String displayName,
+  }) async {
+    final credential = await _auth.createUserWithEmailAndPassword(
+      email: email,
+      password: password,
+    );
+    await credential.user?.updateDisplayName(displayName);
+    return _mapCredentialUser(credential);
+  }
+
+  @override
   Future<AppUser> signInWithGoogle() async {
     if (kIsWeb) {
       final credential = await _auth.signInWithPopup(GoogleAuthProvider());

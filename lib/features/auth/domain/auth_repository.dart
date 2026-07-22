@@ -5,6 +5,17 @@ abstract class AuthRepository {
 
   AppUser? get currentUser;
 
+  Future<AppUser> signInWithEmailAndPassword({
+    required String email,
+    required String password,
+  });
+
+  Future<AppUser> signUpWithEmailAndPassword({
+    required String email,
+    required String password,
+    required String displayName,
+  });
+
   Future<AppUser> signInWithGoogle();
 
   Future<void> sendPhoneVerificationCode({

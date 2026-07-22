@@ -163,7 +163,7 @@ class _SignInPageState extends State<SignInPage> {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  context.tr('other_sign_in_options'),
+                  context.tr('choose_sign_in'),
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w800,
                   ),
