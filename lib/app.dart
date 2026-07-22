@@ -17,6 +17,8 @@ import 'features/auth/data/session_activity_store.dart';
 import 'features/auth/domain/auth_repository.dart';
 import 'features/auth/presentation/pages/auth_gate.dart';
 import 'features/medication_reminder/data/datasources/medication_local_data_source.dart';
+import 'features/medication_reminder/data/datasources/medication_report_local_data_source.dart';
+import 'features/medication_reminder/data/datasources/medication_report_remote_data_source.dart';
 import 'features/medication_reminder/data/datasources/medication_remote_data_source.dart';
 import 'features/medication_reminder/data/repositories/medication_repository_impl.dart';
 import 'features/medication_reminder/data/services/medication_notification_service.dart';
@@ -103,14 +105,23 @@ class _MediMindAppState extends State<MediMindApp> {
     final firestore = FirebaseFirestore.instance;
     final storage = FirebaseStorage.instance;
     final localDataSource = MedicationLocalDataSource(boxName: 'medications');
+    final reportLocalDataSource = MedicationReportLocalDataSource(
+      boxName: 'medication_reports',
+    );
     final remoteDataSource = MedicationRemoteDataSource(firestore: firestore);
+    final reportRemoteDataSource = MedicationReportRemoteDataSource(
+      firestore: firestore,
+    );
 
     return MedicationRepositoryImpl(
       localDataSource: localDataSource,
+      reportLocalDataSource: reportLocalDataSource,
       syncService: MedicationSyncService(
         firestore: firestore,
         storage: storage,
         localDataSource: localDataSource,
+        reportLocalDataSource: reportLocalDataSource,
+        reportRemoteDataSource: reportRemoteDataSource,
         remoteDataSource: remoteDataSource,
       ),
       notificationService: notificationService,

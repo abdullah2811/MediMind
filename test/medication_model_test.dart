@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:medimind/features/medication_reminder/domain/models/medication.dart';
+import 'package:medimind/features/medication_reminder/domain/services/medication_image_data.dart';
 
 void main() {
   test('meal time is calculated from the medicine-to-meal relation', () {
@@ -70,6 +71,31 @@ void main() {
     expect(restored.effectiveDoses.single.dosageValue, '1 tablet');
     expect(restored.scheduleFrequency, 'daily');
     expect(restored.occursOnDate(DateTime(2026, 7, 21)), isTrue);
+  });
+
+  test('local medicine artwork is decoded safely', () {
+    final medicine = Medication(
+      id: 'photo',
+      medicineName: 'Photo medicine',
+      dose: '1 pill',
+      durationDays: 0,
+      timeOfDay: '09:00',
+      mealOffset: 0,
+      imageBytesBase64: 'AQID',
+      backupImageUrl: 'https://example.com/photo.jpg',
+      isActive: true,
+      updatedAt: DateTime(2026, 7, 22),
+    );
+
+    expect(medicationImageBytes(medicine), [1, 2, 3]);
+    expect(
+      medicationNetworkImageUrl(medicine),
+      'https://example.com/photo.jpg',
+    );
+    expect(
+      medicationImageBytes(medicine.copyWith(imageBytesBase64: '%%%')),
+      isNull,
+    );
   });
 
   test('all supported recurrence rules calculate their dates correctly', () {

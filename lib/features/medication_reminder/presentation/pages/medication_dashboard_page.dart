@@ -5,9 +5,12 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../data/services/medication_notification_service.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
+import '../../domain/services/medication_image_data.dart';
 import 'add_reminder_page.dart';
+import 'medication_report_page.dart';
 
 class MedicationDashboardPage extends StatefulWidget {
   const MedicationDashboardPage({
@@ -26,7 +29,8 @@ class MedicationDashboardPage extends StatefulWidget {
       _MedicationDashboardPageState();
 }
 
-class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
+class _MedicationDashboardPageState extends State<MedicationDashboardPage>
+    with WidgetsBindingObserver {
   Timer? _clockTimer;
   DateTime _now = DateTime.now();
   Future<List<Medication>>? _medicationsFuture;
@@ -34,6 +38,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
     _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (mounted) {
@@ -45,9 +50,17 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _clockTimer?.cancel();
     unawaited(widget.repository.stopAutoSync());
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      setState(_load);
+    }
   }
 
   Future<void> _startAutoSync() async {
@@ -293,14 +306,15 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
     }
   }
 
-  Medication? _nextMedication(List<Medication> medications) {
-    if (medications.isEmpty) {
-      return null;
-    }
-
-    final scheduled = medications.toList(growable: false)
-      ..sort((left, right) => _nextTime(left).compareTo(_nextTime(right)));
-    return scheduled.first;
+  Future<void> _openReports() {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => MedicationReportPage(
+          uid: widget.uid,
+          repository: widget.repository,
+        ),
+      ),
+    );
   }
 
   DateTime _nextTime(Medication medication) {
@@ -357,11 +371,11 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
     return candidates.first;
   }
 
-  String _formatCountdown(Medication? medication) {
-    if (medication == null) {
+  String _formatCountdown(DateTime? scheduledAt) {
+    if (scheduledAt == null) {
       return context.tr('no_active_medicines');
     }
-    final diff = _nextTime(medication).difference(_now);
+    final diff = scheduledAt.difference(_now);
     final hours = diff.inHours;
     final minutes = diff.inMinutes.remainder(60);
     return '${hours.toString().padLeft(2, '0')}h ${minutes.toString().padLeft(2, '0')}m';
@@ -379,7 +393,22 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
             final todayMedications = medications
                 .where((medication) => medication.occursOnDate(_now))
                 .toList(growable: false);
-            final nextMedication = _nextMedication(medications);
+            final upcomingEvents = buildMedicationReminderPlan(
+              medications,
+              from: _now,
+              horizonDays: 366,
+              maxEvents: 4,
+            );
+            final startOfToday = DateTime(_now.year, _now.month, _now.day);
+            final todayEvents = buildMedicationReminderPlan(
+              medications,
+              from: startOfToday.subtract(const Duration(milliseconds: 1)),
+              horizonDays: 0,
+              maxEvents: 360,
+            );
+            final nextEvent = upcomingEvents.isEmpty
+                ? null
+                : upcomingEvents.first;
 
             return RefreshIndicator(
               onRefresh: _refresh,
@@ -396,6 +425,11 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                       style: TextStyle(fontWeight: FontWeight.w800),
                     ),
                     actions: [
+                      IconButton(
+                        tooltip: context.tr('reports'),
+                        onPressed: _openReports,
+                        icon: const Icon(Icons.assessment_outlined),
+                      ),
                       const Padding(
                         padding: EdgeInsets.symmetric(vertical: 8),
                         child: LanguageToggleButton(),
@@ -411,11 +445,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                     padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                     sliver: SliverToBoxAdapter(
                       child: _HeroHeader(
-                        nextMedication: nextMedication,
-                        countdownText: _formatCountdown(nextMedication),
-                        remaining: nextMedication == null
-                            ? null
-                            : _nextTime(nextMedication).difference(_now),
+                        upcomingEvents: upcomingEvents,
+                        todayEvents: todayEvents,
+                        countdownText: _formatCountdown(nextEvent?.scheduledAt),
+                        now: _now,
                       ),
                     ),
                   ),
@@ -436,7 +469,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
                           ),
                           _MetricCard(
                             title: context.tr('dashboard_next_in'),
-                            value: _formatCountdown(nextMedication),
+                            value: _formatCountdown(nextEvent?.scheduledAt),
                             icon: Icons.schedule_outlined,
                           ),
                         ],
@@ -641,21 +674,24 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage> {
 
 class _HeroHeader extends StatelessWidget {
   const _HeroHeader({
-    required this.nextMedication,
+    required this.upcomingEvents,
+    required this.todayEvents,
     required this.countdownText,
-    required this.remaining,
+    required this.now,
   });
 
-  final Medication? nextMedication;
+  final List<MedicationReminderPlanItem> upcomingEvents;
+  final List<MedicationReminderPlanItem> todayEvents;
   final String countdownText;
-  final Duration? remaining;
+  final DateTime now;
 
   @override
   Widget build(BuildContext context) {
-    final remainingMinutes = remaining?.inMinutes ?? 0;
-    final dayFraction = nextMedication == null
-        ? 0.0
-        : (remainingMinutes / Duration.minutesPerDay).clamp(0.015, 1.0);
+    final nextEvent = upcomingEvents.isEmpty ? null : upcomingEvents.first;
+    final dayFraction = (now.hour * 60 + now.minute) / Duration.minutesPerDay;
+    final headlineDate = nextEvent?.scheduledAt ?? now;
+    final weekday = _localizedWeekday(context, headlineDate);
+    final date = _localizedOrdinalDate(context, headlineDate);
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
       decoration: BoxDecoration(
@@ -676,93 +712,132 @@ class _HeroHeader extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Icon(
-                  Icons.medication_liquid_outlined,
-                  color: Colors.white,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  nextMedication == null
-                      ? context.tr('no_active_medicines')
-                      : context.tr('next_medicine'),
-                  style: const TextStyle(
-                    color: Colors.white70,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final railWidth = math.min(154.0, constraints.maxWidth * 0.48);
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 4, right: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            weekday,
+                            key: const ValueKey('hero-weekday'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 27,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            date,
+                            key: const ValueKey('hero-date'),
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
-              ),
-            ],
+                  SizedBox(
+                    width: railWidth,
+                    height: 132,
+                    child: _UpcomingEventRail(
+                      events: upcomingEvents.take(3).toList(growable: false),
+                      now: now,
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
-          const SizedBox(height: 10),
-          Text(
-            nextMedication?.medicineName ?? context.tr('add_first_reminder'),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 27,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.5,
-            ),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            nextMedication == null
-                ? context.tr('create_first_reminder_hint')
-                : '${context.tr('due_in')} $countdownText',
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 15,
-              height: 1.35,
-            ),
-          ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 4),
           SizedBox(
-            height: 148,
+            height: 174,
             child: Stack(
               children: [
                 Positioned.fill(
                   child: CustomPaint(
-                    painter: _DayCyclePainter(progress: dayFraction),
+                    painter: _DayCyclePainter(
+                      progress: dayFraction,
+                      eventFractions: todayEvents
+                          .map(_eventDayFraction)
+                          .toList(growable: false),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  left: 40,
+                  right: 40,
+                  top: 72,
+                  child: Column(
+                    children: [
+                      Text(
+                        nextEvent == null
+                            ? context.tr('no_active_medicines')
+                            : _eventLabel(context, nextEvent),
+                        key: const ValueKey('hero-current-event'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        nextEvent == null
+                            ? context.tr('create_first_reminder_hint')
+                            : '${context.tr('due_in')} $countdownText',
+                        maxLines: 2,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 13,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 Positioned(
                   left: 4,
                   bottom: 0,
                   child: Text(
-                    context.tr('now'),
+                    _eventTime(context, now),
+                    key: const ValueKey('hero-now-time'),
                     style: const TextStyle(
-                      color: Colors.white70,
+                      color: Colors.white,
+                      fontFamily: 'Manrope',
                       fontSize: 12,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
-                Positioned(
-                  right: 2,
+                const Positioned(
+                  right: 4,
                   bottom: 0,
                   child: Text(
-                    nextMedication == null
-                        ? '--:--'
-                        : MaterialLocalizations.of(context).formatTimeOfDay(
-                            _parseDashboardTime(nextMedication!.timeOfDay),
-                            alwaysUse24HourFormat: false,
-                          ),
-                    style: const TextStyle(
+                    '11:59 PM',
+                    style: TextStyle(
+                      color: Colors.white70,
                       fontFamily: 'Manrope',
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ),
@@ -775,10 +850,123 @@ class _HeroHeader extends StatelessWidget {
   }
 }
 
+class _UpcomingEventRail extends StatelessWidget {
+  const _UpcomingEventRail({required this.events, required this.now});
+
+  final List<MedicationReminderPlanItem> events;
+  final DateTime now;
+
+  @override
+  Widget build(BuildContext context) {
+    if (events.isEmpty) {
+      return Center(
+        child: Text(
+          context.tr('no_upcoming_events'),
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      );
+    }
+    return Column(
+      children: List.generate(
+        events.length,
+        (index) => Expanded(
+          child: _UpcomingEventRailItem(
+            event: events[index],
+            now: now,
+            isNext: index == 0,
+            isLast: index == events.length - 1,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _UpcomingEventRailItem extends StatelessWidget {
+  const _UpcomingEventRailItem({
+    required this.event,
+    required this.now,
+    required this.isNext,
+    required this.isLast,
+  });
+
+  final MedicationReminderPlanItem event;
+  final DateTime now;
+  final bool isNext;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 16,
+          child: Column(
+            children: [
+              Container(
+                key: isNext ? const ValueKey('next-event-dot') : null,
+                width: isNext ? 12 : 8,
+                height: isNext ? 12 : 8,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isNext
+                      ? AppPalette.saffron
+                      : Colors.white.withValues(alpha: 0.35),
+                  border: isNext
+                      ? Border.all(color: Colors.white, width: 2)
+                      : null,
+                ),
+              ),
+              if (!isLast)
+                Expanded(
+                  child: Container(
+                    width: 1.5,
+                    color: Colors.white.withValues(alpha: 0.22),
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                _eventTimeWithDay(context, event.scheduledAt, now),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontFamily: 'Manrope',
+                  fontSize: isNext ? 12 : 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              Text(
+                _eventLabel(context, event),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _DayCyclePainter extends CustomPainter {
-  const _DayCyclePainter({required this.progress});
+  const _DayCyclePainter({
+    required this.progress,
+    required this.eventFractions,
+  });
 
   final double progress;
+  final List<double> eventFractions;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -804,21 +992,63 @@ class _DayCyclePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     canvas.drawArc(rect, math.pi, math.pi, false, basePaint);
-    if (progress > 0) {
-      canvas.drawArc(rect, math.pi, math.pi * progress, false, progressPaint);
-      final markerAngle = math.pi + math.pi * progress;
-      final marker = Offset(
-        rect.center.dx + rect.width / 2 * math.cos(markerAngle),
-        rect.center.dy + rect.height / 2 * math.sin(markerAngle),
+    final safeProgress = progress.clamp(0.0, 1.0);
+    if (safeProgress > 0) {
+      canvas.drawArc(
+        rect,
+        math.pi,
+        math.pi * safeProgress,
+        false,
+        progressPaint,
       );
-      canvas.drawCircle(marker, 7, Paint()..color = Colors.white);
-      canvas.drawCircle(marker, 3.5, Paint()..color = AppPalette.saffron);
     }
+
+    for (final fraction in eventFractions.toSet()) {
+      final safeFraction = fraction.clamp(0.0, 1.0);
+      final point = _pointOnDayArc(rect, safeFraction);
+      final hasPassed = safeFraction <= safeProgress;
+      canvas.drawCircle(
+        point,
+        6,
+        Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        point,
+        3.5,
+        Paint()
+          ..color = hasPassed
+              ? AppPalette.persimmon
+              : AppPalette.aubergine.withValues(alpha: 0.72),
+      );
+    }
+
+    final currentPoint = _pointOnDayArc(rect, safeProgress);
+    canvas.drawCircle(currentPoint, 8, Paint()..color = Colors.white);
+    canvas.drawCircle(currentPoint, 4.25, Paint()..color = AppPalette.saffron);
+  }
+
+  Offset _pointOnDayArc(Rect rect, double fraction) {
+    final angle = math.pi + math.pi * fraction;
+    return Offset(
+      rect.center.dx + rect.width / 2 * math.cos(angle),
+      rect.center.dy + rect.height / 2 * math.sin(angle),
+    );
   }
 
   @override
   bool shouldRepaint(covariant _DayCyclePainter oldDelegate) {
-    return oldDelegate.progress != progress;
+    if (oldDelegate.progress != progress ||
+        oldDelegate.eventFractions.length != eventFractions.length) {
+      return true;
+    }
+    for (var index = 0; index < eventFractions.length; index++) {
+      if (oldDelegate.eventFractions[index] != eventFractions[index]) {
+        return true;
+      }
+    }
+    return false;
   }
 }
 
@@ -1071,103 +1301,254 @@ class _MedicineCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final nextLabel = MaterialLocalizations.of(context).formatTimeOfDay(
+      TimeOfDay.fromDateTime(nextTime),
+      alwaysUse24HourFormat: false,
+    );
     return Card(
       elevation: 0,
+      color: Colors.white,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(26),
         side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(26),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Row(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                width: 54,
-                height: 54,
-                decoration: BoxDecoration(
-                  color: AppPalette.blush.withValues(alpha: 0.65),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Icon(
-                  Icons.medication_outlined,
-                  color: AppPalette.persimmon,
-                ),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      medication.medicineName,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      medication.dose.isEmpty
-                          ? context.tr('dose_not_set')
-                          : _localizedDoseSummary(context, medication),
-                      style: const TextStyle(color: AppPalette.muted),
-                    ),
-                    const SizedBox(height: 6),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _MedicineArtwork(medication: medication),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _InfoChip(
-                          label:
-                              '${context.tr('next')}: '
-                              '${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(nextTime), alwaysUse24HourFormat: false)}',
-                          icon: Icons.schedule,
-                        ),
-                        _InfoChip(
-                          label: _localizedSchedule(context, medication),
-                          icon: Icons.event_repeat_outlined,
-                        ),
-                        if (medication.powerLabel.isNotEmpty)
-                          _InfoChip(
-                            label: medication.powerLabel,
-                            icon: Icons.science_outlined,
+                        Text(
+                          medication.medicineName,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 19,
+                            height: 1.15,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.25,
                           ),
-                        if ((medication.companyName ?? '').isNotEmpty)
-                          _InfoChip(
-                            label: medication.companyName!,
-                            icon: Icons.apartment_outlined,
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          <String>[
+                            context.tr(medication.medicineType),
+                            if (medication.powerLabel.isNotEmpty)
+                              medication.powerLabel,
+                          ].join(' • '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppPalette.muted,
+                            fontWeight: FontWeight.w700,
                           ),
+                        ),
+                        const SizedBox(height: 9),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 7,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppPalette.blush.withValues(alpha: 0.46),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(
+                                Icons.schedule_rounded,
+                                size: 15,
+                                color: AppPalette.aubergine,
+                              ),
+                              const SizedBox(width: 6),
+                              Flexible(
+                                child: Text(
+                                  '${context.tr('next')}: $nextLabel',
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: AppPalette.aubergine,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
-                    const SizedBox(height: 12),
-                    _StatusActions(
-                      title: context.tr('medicine_status'),
-                      status: checkIn?.medicineStatus,
-                      takenAt: checkIn?.medicineTakenAt,
-                      takenWithMeal: checkIn?.takenWithMeal ?? false,
-                      onTaken: onMedicineTaken,
-                      onNotTaken: onMedicineNotTaken,
+                  ),
+                  const SizedBox(width: 6),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Icon(
+                      Icons.arrow_forward_ios_rounded,
+                      size: 16,
+                      color: AppPalette.muted,
                     ),
-                    if (medication.mealScheduleEnabled) ...[
-                      const SizedBox(height: 10),
-                      _StatusActions(
-                        title: context.tr('meal_status'),
-                        status: checkIn?.mealStatus,
-                        takenAt: checkIn?.mealTakenAt,
-                        onTaken: onMealTaken,
-                        onNotTaken: onMealNotTaken,
-                      ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 13,
+                  vertical: 11,
+                ),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppPalette.ivory,
+                      AppPalette.blush.withValues(alpha: 0.24),
                     ],
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: AppPalette.plum.withValues(alpha: 0.08),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.medication_liquid_rounded,
+                      size: 19,
+                      color: AppPalette.persimmon,
+                    ),
+                    const SizedBox(width: 9),
+                    Expanded(
+                      child: Text(
+                        medication.dose.isEmpty
+                            ? context.tr('dose_not_set')
+                            : _localizedDoseSummary(context, medication),
+                        style: const TextStyle(
+                          color: AppPalette.aubergine,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _InfoChip(
+                    label: _localizedSchedule(context, medication),
+                    icon: Icons.event_repeat_outlined,
+                  ),
+                  if ((medication.companyName ?? '').isNotEmpty)
+                    _InfoChip(
+                      label: medication.companyName!,
+                      icon: Icons.apartment_outlined,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _StatusActions(
+                title: context.tr('medicine_status'),
+                status: checkIn?.medicineStatus,
+                takenAt: checkIn?.medicineTakenAt,
+                takenWithMeal: checkIn?.takenWithMeal ?? false,
+                onTaken: onMedicineTaken,
+                onNotTaken: onMedicineNotTaken,
+              ),
+              if (medication.mealScheduleEnabled) ...[
+                const SizedBox(height: 10),
+                _StatusActions(
+                  title: context.tr('meal_status'),
+                  status: checkIn?.mealStatus,
+                  takenAt: checkIn?.mealTakenAt,
+                  onTaken: onMealTaken,
+                  onNotTaken: onMealNotTaken,
+                ),
+              ],
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _MedicineArtwork extends StatelessWidget {
+  const _MedicineArtwork({required this.medication});
+
+  final Medication medication;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = medicationImageBytes(medication);
+    final networkUrl = medicationNetworkImageUrl(medication);
+    Widget image;
+    if (bytes != null) {
+      image = Image.memory(
+        bytes,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) => _fallback(),
+      );
+    } else if (networkUrl != null) {
+      image = Image.network(
+        networkUrl,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) => _fallback(),
+      );
+    } else {
+      image = _fallback();
+    }
+
+    return Container(
+      key: ValueKey('medicine-artwork-${medication.id}'),
+      width: 82,
+      height: 82,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(21),
+        boxShadow: [
+          BoxShadow(
+            color: AppPalette.aubergine.withValues(alpha: 0.14),
+            blurRadius: 16,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(21),
+        child: ColoredBox(color: AppPalette.blush, child: image),
+      ),
+    );
+  }
+
+  Widget _fallback() {
+    final icon = switch (medication.medicineType) {
+      'syrup' => Icons.local_drink_outlined,
+      'drop' => Icons.water_drop_outlined,
+      'insulin' => Icons.vaccines_outlined,
+      _ => Icons.medication_outlined,
+    };
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [AppPalette.blush, Color(0xFFFFE7D7)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Icon(icon, color: AppPalette.persimmon, size: 34),
     );
   }
 }
@@ -1343,6 +1724,138 @@ String _localizedDoseSummary(BuildContext context, Medication medication) {
         return '$displayTime — ${dose.dosageValue} $unit';
       })
       .join(' • ');
+}
+
+String _eventLabel(BuildContext context, MedicationReminderPlanItem event) {
+  final medicineNames = event.doses
+      .map((item) => item.medication.medicineName)
+      .toSet()
+      .join(', ');
+  final mealNames = event.meals
+      .map((item) => item.medication.medicineName)
+      .toSet()
+      .join(', ');
+  if (event.hasMedicine && event.hasMeal) {
+    return '$medicineNames + ${context.tr('meal_event')}';
+  }
+  if (event.hasMedicine) {
+    return medicineNames;
+  }
+  return '${context.tr('meal_event')} — $mealNames';
+}
+
+String _eventTime(BuildContext context, DateTime scheduledAt) {
+  return MaterialLocalizations.of(context).formatTimeOfDay(
+    TimeOfDay.fromDateTime(scheduledAt),
+    alwaysUse24HourFormat: false,
+  );
+}
+
+double _eventDayFraction(MedicationReminderPlanItem event) {
+  final time = event.scheduledAt;
+  return (time.hour * 60 + time.minute) / Duration.minutesPerDay;
+}
+
+String _localizedWeekday(BuildContext context, DateTime date) {
+  const english = <String>[
+    'Monday',
+    'Tuesday',
+    'Wednesday',
+    'Thursday',
+    'Friday',
+    'Saturday',
+    'Sunday',
+  ];
+  const bangla = <String>[
+    'সোমবার',
+    'মঙ্গলবার',
+    'বুধবার',
+    'বৃহস্পতিবার',
+    'শুক্রবার',
+    'শনিবার',
+    'রবিবার',
+  ];
+  final isBangla = AppLanguageScope.controllerOf(context).languageCode == 'bn';
+  return (isBangla ? bangla : english)[date.weekday - 1];
+}
+
+String _localizedOrdinalDate(BuildContext context, DateTime date) {
+  const englishMonths = <String>[
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  const banglaMonths = <String>[
+    'জানুয়ারি',
+    'ফেব্রুয়ারি',
+    'মার্চ',
+    'এপ্রিল',
+    'মে',
+    'জুন',
+    'জুলাই',
+    'আগস্ট',
+    'সেপ্টেম্বর',
+    'অক্টোবর',
+    'নভেম্বর',
+    'ডিসেম্বর',
+  ];
+  final isBangla = AppLanguageScope.controllerOf(context).languageCode == 'bn';
+  if (isBangla) {
+    return '${_toBanglaDigits(date.day)} ${banglaMonths[date.month - 1]}, '
+        '${_toBanglaDigits(date.year)}';
+  }
+  final mod100 = date.day % 100;
+  final suffix = mod100 >= 11 && mod100 <= 13
+      ? 'th'
+      : switch (date.day % 10) {
+          1 => 'st',
+          2 => 'nd',
+          3 => 'rd',
+          _ => 'th',
+        };
+  return '${date.day}$suffix ${englishMonths[date.month - 1]}, ${date.year}';
+}
+
+String _toBanglaDigits(Object value) {
+  const digits = <String>['০', '১', '২', '৩', '৪', '৫', '৬', '৭', '৮', '৯'];
+  return value
+      .toString()
+      .split('')
+      .map((character) => int.tryParse(character))
+      .map((digit) => digit == null ? '' : digits[digit])
+      .join();
+}
+
+String _eventTimeWithDay(
+  BuildContext context,
+  DateTime scheduledAt,
+  DateTime now,
+) {
+  final today = DateTime(now.year, now.month, now.day);
+  final eventDay = DateTime(
+    scheduledAt.year,
+    scheduledAt.month,
+    scheduledAt.day,
+  );
+  final dayDifference = eventDay.difference(today).inDays;
+  final time = _eventTime(context, scheduledAt);
+  if (dayDifference == 0) {
+    return time;
+  }
+  if (dayDifference == 1) {
+    return '${context.tr('tomorrow_short')} $time';
+  }
+  return '${scheduledAt.day.toString().padLeft(2, '0')}/'
+      '${scheduledAt.month.toString().padLeft(2, '0')} $time';
 }
 
 String _localizedSchedule(BuildContext context, Medication medication) {

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -5,13 +7,15 @@ import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../../domain/models/medication.dart';
+import '../../domain/services/medication_image_data.dart';
+import 'medication_notification_action_handler.dart';
 
 class MedicationReminderPlanItem {
   MedicationReminderPlanItem({required this.scheduledAt});
 
   final DateTime scheduledAt;
   final List<({Medication medication, MedicationDose dose})> doses = [];
-  final List<Medication> meals = [];
+  final List<({Medication medication, MedicationDose dose})> meals = [];
 
   bool get hasMedicine => doses.isNotEmpty;
   bool get hasMeal => meals.isNotEmpty;
@@ -57,8 +61,12 @@ List<MedicationReminderPlanItem> buildMedicationReminderPlan(
           );
           if (mealTime.isAfter(now)) {
             final mealEvent = eventAt(mealTime);
-            if (!mealEvent.meals.any((item) => item.id == medication.id)) {
-              mealEvent.meals.add(medication);
+            if (!mealEvent.meals.any(
+              (item) =>
+                  item.medication.id == medication.id &&
+                  item.dose.timeOfDay == dose.timeOfDay,
+            )) {
+              mealEvent.meals.add((medication: medication, dose: dose));
             }
           }
         }
@@ -103,8 +111,6 @@ class MedicationNotificationService {
       return;
     }
     if (kIsWeb) {
-      // flutter_local_notifications has no web platform implementation.
-      // Medicines still save locally and web builds simply skip OS alarms.
       _initialized = true;
       return;
     }
@@ -124,7 +130,12 @@ class MedicationNotificationService {
       ),
     );
 
-    await _plugin.initialize(settings);
+    await _plugin.initialize(
+      settings,
+      onDidReceiveNotificationResponse: medicationNotificationActionBackground,
+      onDidReceiveBackgroundNotificationResponse:
+          medicationNotificationActionBackground,
+    );
     final android = _plugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
@@ -142,11 +153,14 @@ class MedicationNotificationService {
     _initialized = true;
   }
 
-  Future<void> scheduleMedication(Medication medication) {
-    return rescheduleAll(<Medication>[medication]);
+  Future<void> scheduleMedication(Medication medication, {String uid = ''}) {
+    return rescheduleAll(<Medication>[medication], uid: uid);
   }
 
-  Future<void> rescheduleAll(List<Medication> medications) async {
+  Future<void> rescheduleAll(
+    List<Medication> medications, {
+    String uid = '',
+  }) async {
     if (kIsWeb) {
       return;
     }
@@ -162,14 +176,19 @@ class MedicationNotificationService {
     )) {
       final trigger = tz.TZDateTime.from(event.scheduledAt, tz.local);
       final content = _notificationContent(event);
-      final details = _notificationDetails(content.title, content.body);
+      final details = _notificationDetails(
+        content.title,
+        content.body,
+        event,
+        isBangla: content.isBangla,
+      );
       await _plugin.zonedSchedule(
         _notificationId(event.scheduledAt),
         content.title,
         content.body,
         trigger,
         details,
-        payload: event.scheduledAt.toIso8601String(),
+        payload: _notificationPayload(event, uid: uid),
         androidScheduleMode: _canScheduleExact
             ? AndroidScheduleMode.exactAllowWhileIdle
             : AndroidScheduleMode.inexactAllowWhileIdle,
@@ -195,7 +214,42 @@ class MedicationNotificationService {
     await _plugin.cancelAll();
   }
 
-  NotificationDetails _notificationDetails(String title, String body) {
+  NotificationDetails _notificationDetails(
+    String title,
+    String body,
+    MedicationReminderPlanItem event, {
+    required bool isBangla,
+  }) {
+    final eventMedications = <String, Medication>{
+      for (final item in event.doses) item.medication.id: item.medication,
+      for (final item in event.meals) item.medication.id: item.medication,
+    };
+    Uint8List? artworkBytes;
+    for (final medication in eventMedications.values) {
+      artworkBytes = medicationImageBytes(medication);
+      if (artworkBytes != null) {
+        break;
+      }
+    }
+    final artwork = artworkBytes == null
+        ? null
+        : ByteArrayAndroidBitmap(artworkBytes);
+    final StyleInformation styleInformation;
+    if (artwork != null && eventMedications.length == 1) {
+      styleInformation = BigPictureStyleInformation(
+        artwork,
+        contentTitle: title,
+        summaryText: body,
+        largeIcon: artwork,
+        hideExpandedLargeIcon: true,
+      );
+    } else {
+      styleInformation = BigTextStyleInformation(
+        body,
+        contentTitle: title,
+        summaryText: 'MediMind',
+      );
+    }
     return NotificationDetails(
       android: AndroidNotificationDetails(
         _channelId,
@@ -220,11 +274,9 @@ class MedicationNotificationService {
         groupKey: 'medimind_daily_reminders',
         ticker: 'MediMind reminder',
         subText: 'MediMind',
-        styleInformation: BigTextStyleInformation(
-          body,
-          contentTitle: title,
-          summaryText: 'MediMind',
-        ),
+        largeIcon: artwork,
+        styleInformation: styleInformation,
+        actions: _notificationActions(event, isBangla: isBangla),
       ),
       iOS: const DarwinNotificationDetails(
         presentAlert: true,
@@ -238,12 +290,12 @@ class MedicationNotificationService {
     );
   }
 
-  ({String title, String body}) _notificationContent(
+  ({String title, String body, bool isBangla}) _notificationContent(
     MedicationReminderPlanItem event,
   ) {
     final isBangla = <Medication>[
       ...event.doses.map((item) => item.medication),
-      ...event.meals,
+      ...event.meals.map((item) => item.medication),
     ].every((item) => item.languageCode == 'bn');
     final time = _format12Hour(
       '${event.scheduledAt.hour.toString().padLeft(2, '0')}:'
@@ -261,7 +313,7 @@ class MedicationNotificationService {
         })
         .join(' • ');
     final mealNames = event.meals
-        .map((item) => item.medicineName)
+        .map((item) => item.medication.medicineName)
         .toSet()
         .join(', ');
 
@@ -276,7 +328,7 @@ class MedicationNotificationService {
         if (event.hasMeal) '$mealNames-এর সঙ্গে নির্ধারিত খাবার',
         'সময় $time',
       ];
-      return (title: title, body: parts.join(' • '));
+      return (title: title, body: parts.join(' • '), isBangla: true);
     }
 
     final title = event.hasMedicine && event.hasMeal
@@ -289,7 +341,91 @@ class MedicationNotificationService {
       if (event.hasMeal) 'Meal linked to $mealNames',
       'Due at $time',
     ];
-    return (title: title, body: parts.join(' • '));
+    return (title: title, body: parts.join(' • '), isBangla: false);
+  }
+
+  List<AndroidNotificationAction> _notificationActions(
+    MedicationReminderPlanItem event, {
+    required bool isBangla,
+  }) {
+    if (event.hasMedicine && event.hasMeal) {
+      return <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          allTakenAction,
+          isBangla ? 'সব নেওয়া হয়েছে' : 'All taken',
+          showsUserInterface: false,
+        ),
+        AndroidNotificationAction(
+          allNotTakenAction,
+          isBangla ? 'কোনোটিই নেওয়া হয়নি' : 'None taken',
+          showsUserInterface: false,
+        ),
+      ];
+    }
+    if (event.hasMedicine) {
+      return <AndroidNotificationAction>[
+        AndroidNotificationAction(
+          medicineTakenAction,
+          isBangla ? 'ওষুধ নিয়েছি' : 'Medicine taken',
+          showsUserInterface: false,
+        ),
+        AndroidNotificationAction(
+          medicineNotTakenAction,
+          isBangla ? 'ওষুধ নিইনি' : 'Not taken',
+          showsUserInterface: false,
+        ),
+      ];
+    }
+    return <AndroidNotificationAction>[
+      AndroidNotificationAction(
+        mealTakenAction,
+        isBangla ? 'খাবার খেয়েছি' : 'Meal taken',
+        showsUserInterface: false,
+      ),
+      AndroidNotificationAction(
+        mealNotTakenAction,
+        isBangla ? 'খাবার খাইনি' : 'Meal not taken',
+        showsUserInterface: false,
+      ),
+    ];
+  }
+
+  String _notificationPayload(
+    MedicationReminderPlanItem event, {
+    required String uid,
+  }) {
+    Map<String, String> occurrence(
+      Medication medication,
+      MedicationDose dose,
+      DateTime date,
+    ) {
+      return <String, String>{
+        'medicationId': medication.id,
+        'dateKey': medicationDateKey(date),
+        'doseTime': dose.timeOfDay,
+      };
+    }
+
+    return jsonEncode(<String, dynamic>{
+      'uid': uid,
+      'scheduledAt': event.scheduledAt.toIso8601String(),
+      'doses': event.doses
+          .map(
+            (item) => occurrence(item.medication, item.dose, event.scheduledAt),
+          )
+          .toList(growable: false),
+      'meals': event.meals
+          .map(
+            (item) => occurrence(
+              item.medication,
+              item.dose,
+              event.scheduledAt.add(
+                Duration(minutes: item.medication.mealOffset),
+              ),
+            ),
+          )
+          .toList(growable: false),
+    });
   }
 
   String _englishDosageUnit(String unit) {

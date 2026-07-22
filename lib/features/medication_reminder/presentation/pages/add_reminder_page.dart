@@ -8,6 +8,7 @@ import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
+import '../../domain/services/medication_image_data.dart';
 import '../../domain/services/meal_timing_validator.dart';
 
 class AddReminderPage extends StatefulWidget {
@@ -44,6 +45,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
   bool _busy = false;
   Uint8List? _imageBytes;
   String? _imagePath;
+  bool _photoChanged = false;
   late List<_DoseRow> _doseRows;
   late Future<List<Medication>> _existingMedicationsFuture;
 
@@ -78,6 +80,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
       _scheduleFrequency = medication.scheduleFrequency;
       _customIntervalController.text = medication.customIntervalDays.toString();
       _imagePath = medication.imagePath;
+      _imageBytes = medicationImageBytes(medication);
       _doseRows = _rowsFromMedication(medication);
     }
   }
@@ -190,7 +193,9 @@ class _AddReminderPageState extends State<AddReminderPage> {
   Future<void> _pickPhoto() async {
     final image = await _imagePicker.pickImage(
       source: ImageSource.camera,
-      imageQuality: 85,
+      imageQuality: 82,
+      maxWidth: 1200,
+      maxHeight: 1200,
     );
     if (image == null) {
       return;
@@ -199,6 +204,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
     setState(() {
       _imageBytes = bytes;
       _imagePath = image.path;
+      _photoChanged = true;
     });
   }
 
@@ -299,7 +305,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
         imageBytesBase64: _imageBytes == null
             ? existing?.imageBytesBase64
             : base64Encode(_imageBytes!),
-        backupImageUrl: existing?.backupImageUrl,
+        backupImageUrl: _photoChanged ? null : existing?.backupImageUrl,
         dose: doseSummary,
         doses: doses,
         doseTimes: doses.map((dose) => dose.timeOfDay).toList(growable: false),
@@ -690,6 +696,11 @@ class _AddReminderPageState extends State<AddReminderPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  Text(
+                    context.tr('medicine_photo_help'),
+                    style: const TextStyle(color: AppPalette.muted),
+                  ),
+                  const SizedBox(height: 12),
                   if (_imageBytes != null)
                     ClipRRect(
                       borderRadius: BorderRadius.circular(14),
@@ -699,19 +710,23 @@ class _AddReminderPageState extends State<AddReminderPage> {
                         fit: BoxFit.cover,
                       ),
                     )
+                  else if ((widget.existingMedication?.backupImageUrl ?? '')
+                      .isNotEmpty)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Image.network(
+                        widget.existingMedication!.backupImageUrl!,
+                        height: 180,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            _EmptyPhotoPreview(
+                              hasSavedPhoto: (_imagePath ?? '').isNotEmpty,
+                            ),
+                      ),
+                    )
                   else
-                    Container(
-                      height: 150,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: AppPalette.blush.withValues(alpha: 0.28),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Text(
-                        (_imagePath ?? '').isNotEmpty
-                            ? context.tr('photo_saved_locally')
-                            : context.tr('no_photo_selected'),
-                      ),
+                    _EmptyPhotoPreview(
+                      hasSavedPhoto: (_imagePath ?? '').isNotEmpty,
                     ),
                   const SizedBox(height: 12),
                   FilledButton.tonalIcon(
@@ -763,6 +778,45 @@ class _HeaderCard extends StatelessWidget {
           fontSize: 22,
           fontWeight: FontWeight.w800,
         ),
+      ),
+    );
+  }
+}
+
+class _EmptyPhotoPreview extends StatelessWidget {
+  const _EmptyPhotoPreview({required this.hasSavedPhoto});
+
+  final bool hasSavedPhoto;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 150,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [AppPalette.blush.withValues(alpha: 0.42), AppPalette.ivory],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppPalette.plum.withValues(alpha: 0.12)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            Icons.add_a_photo_outlined,
+            color: AppPalette.persimmon,
+            size: 30,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            context.tr(
+              hasSavedPhoto ? 'photo_saved_locally' : 'no_photo_selected',
+            ),
+          ),
+        ],
       ),
     );
   }

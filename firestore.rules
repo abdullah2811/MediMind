@@ -13,5 +13,18 @@ service cloud.firestore {
                             && request.resource.data.uid == userId
                             && request.resource.data.reminderId == reminderId;
     }
+
+    match /users/{userId}/reports/{reportId} {
+      function isOwner() {
+        return request.auth != null && request.auth.uid == userId;
+      }
+
+      allow read: if isOwner();
+      allow create, update: if isOwner()
+                            && request.resource.data.uid == userId
+                            && request.resource.data.reportId == reportId
+                            && request.resource.data.rangeDays in [7, 30];
+      allow delete: if isOwner();
+    }
   }
 }
