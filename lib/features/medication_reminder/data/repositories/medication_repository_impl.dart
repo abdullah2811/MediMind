@@ -1,25 +1,32 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
+
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
 import '../datasources/medication_local_data_source.dart';
-import '../datasources/medication_remote_data_source.dart';
 import '../services/medication_notification_service.dart';
 import '../services/medication_sync_service.dart';
 
 class MedicationRepositoryImpl implements MedicationRepository {
   MedicationRepositoryImpl({
     required MedicationLocalDataSource localDataSource,
-    required MedicationRemoteDataSource remoteDataSource,
     required MedicationSyncService syncService,
     required MedicationNotificationService notificationService,
+    required Connectivity connectivity,
   }) : _localDataSource = localDataSource,
-       _remoteDataSource = remoteDataSource,
        _syncService = syncService,
-       _notificationService = notificationService;
+       _notificationService = notificationService,
+       _connectivity = connectivity;
 
   final MedicationLocalDataSource _localDataSource;
-  final MedicationRemoteDataSource _remoteDataSource;
   final MedicationSyncService _syncService;
   final MedicationNotificationService _notificationService;
+  final Connectivity _connectivity;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  Timer? _retryTimer;
+  String? _autoSyncUid;
+  bool _hasNetworkConnection = false;
 
   @override
   Future<void> add({
@@ -27,25 +34,15 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required Medication medication,
   }) async {
     await _localDataSource.save(medication);
-    if (medication.isActive) {
-      await _notificationService.scheduleMedication(medication);
-    }
-    _syncService.queuePush(
-      uid: uid,
-      medication: medication,
-      operation: SyncOperation.upsert,
-    );
+    await _rescheduleLocalNotifications();
+    _syncService.queueBackup(uid: uid);
   }
 
   @override
   Future<void> delete({required String uid, required String id}) async {
     final medication = await _localDataSource.getById(id);
     await _localDataSource.delete(id);
-    if (medication != null) {
-      await _notificationService.cancelMedication(medication);
-    } else {
-      await _notificationService.cancelMedicationById(id);
-    }
+    await _rescheduleLocalNotifications();
     if (medication != null) {
       _syncService.queuePush(
         uid: uid,
@@ -57,11 +54,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
 
   @override
   Future<List<Medication>> getAll({required String uid}) async {
-    final localMedications = await _localDataSource.getAll();
-    if (localMedications.isNotEmpty) {
-      return localMedications;
-    }
-    return _remoteDataSource.fetchForUser(uid);
+    return _localDataSource.getAll();
   }
 
   @override
@@ -70,13 +63,8 @@ class MedicationRepositoryImpl implements MedicationRepository {
   }
 
   @override
-  Future<void> syncFromCloud({required String uid}) async {
-    await _syncService.syncFromCloud(uid: uid);
-  }
-
-  @override
   Future<void> backupToCloud({required String uid}) async {
-    await _syncService.backupLocalToCloud(uid: uid);
+    await _syncService.backup(uid: uid);
   }
 
   @override
@@ -84,20 +72,62 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required String uid,
     required Medication medication,
   }) async {
-    final previousMedication = await _localDataSource.getById(medication.id);
-    if (previousMedication != null) {
-      await _notificationService.cancelMedication(previousMedication);
-    } else {
-      await _notificationService.cancelMedicationById(medication.id);
-    }
     await _localDataSource.save(medication);
-    if (medication.isActive) {
-      await _notificationService.scheduleMedication(medication);
+    await _rescheduleLocalNotifications();
+    _syncService.queueBackup(uid: uid);
+  }
+
+  @override
+  Future<void> startAutoSync({required String uid}) async {
+    await stopAutoSync();
+    await _rescheduleLocalNotifications();
+    _autoSyncUid = uid;
+    _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
+      results,
+    ) {
+      _hasNetworkConnection = _isConnected(results);
+      if (_hasNetworkConnection) {
+        _syncService.queueBackup(uid: uid);
+      }
+    });
+    _retryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (_hasNetworkConnection && _autoSyncUid == uid) {
+        _syncService.queueBackup(uid: uid);
+      }
+    });
+
+    final current = await _connectivity.checkConnectivity();
+    _hasNetworkConnection = _isConnected(current);
+    if (_hasNetworkConnection) {
+      try {
+        await _syncService.backup(uid: uid);
+      } catch (_) {
+        // Local data is already durable. The listener/timer retries later.
+      }
     }
-    _syncService.queuePush(
-      uid: uid,
-      medication: medication,
-      operation: SyncOperation.upsert,
-    );
+  }
+
+  @override
+  Future<void> stopAutoSync() async {
+    _autoSyncUid = null;
+    _hasNetworkConnection = false;
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    await _connectivitySubscription?.cancel();
+    _connectivitySubscription = null;
+  }
+
+  bool _isConnected(List<ConnectivityResult> results) {
+    return results.any((result) => result != ConnectivityResult.none);
+  }
+
+  Future<void> _rescheduleLocalNotifications() async {
+    final medications = await _localDataSource.getAll();
+    try {
+      await _notificationService.rescheduleAll(medications);
+    } catch (_) {
+      // The local database is the source of truth. Notification permission or
+      // platform failures must never make a successful local save look failed.
+    }
   }
 }

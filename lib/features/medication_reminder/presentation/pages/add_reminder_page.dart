@@ -4,21 +4,22 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../../../core/localization/app_localization.dart';
+import '../../../../core/theme/app_theme.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
+import '../../domain/services/meal_timing_validator.dart';
 
 class AddReminderPage extends StatefulWidget {
   const AddReminderPage({
     super.key,
     required this.repository,
     required this.uid,
-    required this.onSignOut,
     this.existingMedication,
   });
 
   final MedicationRepository repository;
   final String uid;
-  final Future<void> Function() onSignOut;
   final Medication? existingMedication;
 
   @override
@@ -27,47 +28,88 @@ class AddReminderPage extends StatefulWidget {
 
 class _AddReminderPageState extends State<AddReminderPage> {
   final _medicineController = TextEditingController();
+  final _powerController = TextEditingController();
   final _formulaController = TextEditingController();
   final _companyController = TextEditingController();
   final _notesController = TextEditingController();
+  final _mealMinutesController = TextEditingController(text: '20');
+  final _customIntervalController = TextEditingController(text: '2');
   final _imagePicker = ImagePicker();
 
-  TimeOfDay _selectedTime = TimeOfDay.now();
-  int _mealOffset = 0;
-  bool _isActive = true;
+  String _medicineType = 'tablet';
+  String _powerUnit = 'mg';
+  String _mealRelation = 'before';
+  String _scheduleFrequency = 'daily';
+  bool _mealScheduleEnabled = false;
   bool _busy = false;
   Uint8List? _imageBytes;
   String? _imagePath;
   late List<_DoseRow> _doseRows;
+  late Future<List<Medication>> _existingMedicationsFuture;
 
   @override
   void initState() {
     super.initState();
+    _existingMedicationsFuture = widget.repository.getAll(uid: widget.uid);
     final medication = widget.existingMedication;
-    _doseRows = [_DoseRow()];
+    _doseRows = <_DoseRow>[_DoseRow(time: TimeOfDay.now())];
     if (medication != null) {
       _medicineController.text = medication.medicineName;
+      _powerController.text = medication.powerValue ?? '';
       _formulaController.text = medication.formula ?? '';
       _companyController.text = medication.companyName ?? '';
       _notesController.text = medication.notes ?? '';
-      _mealOffset = medication.mealOffset;
-      _isActive = medication.isActive;
+      _medicineType = _medicineTypes.contains(medication.medicineType)
+          ? medication.medicineType
+          : 'tablet';
+      _powerUnit = _powerUnits.contains(medication.powerUnit)
+          ? medication.powerUnit
+          : 'mg';
+      if (medication.mealOffset < 0) {
+        _mealRelation = 'before';
+        _mealMinutesController.text = medication.mealOffset.abs().toString();
+      } else if (medication.mealOffset > 0) {
+        _mealRelation = 'after';
+        _mealMinutesController.text = medication.mealOffset.toString();
+      } else {
+        _mealRelation = 'with';
+      }
+      _mealScheduleEnabled = medication.mealScheduleEnabled;
+      _scheduleFrequency = medication.scheduleFrequency;
+      _customIntervalController.text = medication.customIntervalDays.toString();
       _imagePath = medication.imagePath;
-      _selectedTime = _parseTime(medication.timeOfDay);
-      _doseRows = _parseDoseRows(medication.dose);
+      _doseRows = _rowsFromMedication(medication);
     }
   }
 
   @override
   void dispose() {
     _medicineController.dispose();
+    _powerController.dispose();
     _formulaController.dispose();
     _companyController.dispose();
     _notesController.dispose();
+    _mealMinutesController.dispose();
+    _customIntervalController.dispose();
     for (final row in _doseRows) {
       row.dispose();
     }
     super.dispose();
+  }
+
+  List<_DoseRow> _rowsFromMedication(Medication medication) {
+    final doses = medication.effectiveDoses;
+    if (doses.isEmpty) {
+      return <_DoseRow>[_DoseRow(time: _parseTime(medication.timeOfDay))];
+    }
+    return doses
+        .map(
+          (dose) => _DoseRow(
+            time: _parseTime(dose.timeOfDay),
+            dosage: dose.dosageValue,
+          ),
+        )
+        .toList(growable: true);
   }
 
   TimeOfDay _parseTime(String value) {
@@ -81,28 +123,67 @@ class _AddReminderPageState extends State<AddReminderPage> {
     );
   }
 
-  List<_DoseRow> _parseDoseRows(String doseText) {
-    if (doseText.trim().isEmpty) {
-      return [_DoseRow()];
-    }
-    return doseText
-        .split(' • ')
-        .map((part) => _DoseRow.fromSummary(part))
-        .toList();
+  String _canonicalTime(TimeOfDay time) {
+    return '${time.hour.toString().padLeft(2, '0')}:'
+        '${time.minute.toString().padLeft(2, '0')}';
   }
 
-  String _canonicalTime(TimeOfDay timeOfDay) {
-    return '${timeOfDay.hour.toString().padLeft(2, '0')}:${timeOfDay.minute.toString().padLeft(2, '0')}';
+  String _displayTime(TimeOfDay time) {
+    return MaterialLocalizations.of(
+      context,
+    ).formatTimeOfDay(time, alwaysUse24HourFormat: false);
   }
 
-  Future<void> _pickTime() async {
+  String get _dosageUnit {
+    return switch (_medicineType) {
+      'syrup' => 'ml',
+      'drop' => 'drop',
+      'insulin' => 'unit',
+      _ => 'pill',
+    };
+  }
+
+  int get _mealOffset {
+    final enteredMinutes = int.tryParse(_mealMinutesController.text.trim());
+    final minutes = (enteredMinutes == null || enteredMinutes <= 0)
+        ? 20
+        : enteredMinutes.clamp(1, 720);
+    return switch (_mealRelation) {
+      'before' => -minutes,
+      'after' => minutes,
+      _ => 0,
+    };
+  }
+
+  String _localizedDosageUnit(BuildContext context) {
+    return switch (_dosageUnit) {
+      'ml' => context.tr('ml'),
+      'drop' => context.tr('drop_unit'),
+      'unit' => context.tr('units'),
+      _ => context.tr('pill'),
+    };
+  }
+
+  TimeOfDay _mealTimeFor(TimeOfDay medicineTime) {
+    return _parseTime(
+      calculateMealTime(_canonicalTime(medicineTime), _mealOffset),
+    );
+  }
+
+  Future<void> _pickDoseTime(_DoseRow row) async {
     final picked = await showTimePicker(
       context: context,
-      initialTime: _selectedTime,
-      helpText: 'Choose reminder time',
+      initialTime: row.time,
+      helpText: context.tr('choose_reminder_time'),
+      builder: (context, child) {
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
+          child: child!,
+        );
+      },
     );
     if (picked != null) {
-      setState(() => _selectedTime = picked);
+      setState(() => row.time = picked);
     }
   }
 
@@ -114,7 +195,6 @@ class _AddReminderPageState extends State<AddReminderPage> {
     if (image == null) {
       return;
     }
-
     final bytes = await image.readAsBytes();
     setState(() {
       _imageBytes = bytes;
@@ -124,7 +204,7 @@ class _AddReminderPageState extends State<AddReminderPage> {
 
   void _addDoseRow() {
     setState(() {
-      _doseRows.add(_DoseRow());
+      _doseRows.add(_DoseRow(time: _doseRows.last.time));
     });
   }
 
@@ -138,55 +218,107 @@ class _AddReminderPageState extends State<AddReminderPage> {
     });
   }
 
-  String _composeDoseSummary() {
-    final rows = _doseRows
-        .map((row) => row.summary)
-        .where((value) => value.trim().isNotEmpty)
+  List<MedicationDose> _structuredDoses() {
+    return _doseRows
+        .where((row) => row.dosageController.text.trim().isNotEmpty)
+        .map(
+          (row) => MedicationDose(
+            timeOfDay: _canonicalTime(row.time),
+            dosageValue: row.dosageController.text.trim(),
+            dosageUnit: _dosageUnit,
+          ),
+        )
         .toList(growable: false);
-    return rows.join(' • ');
   }
 
   Future<void> _saveReminder() async {
+    final languageCode = AppLanguageScope.controllerOf(context).languageCode;
     if (_medicineController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter the medicine name.')),
-      );
+      _showMessage(context.tr('medicine_name_required_error'));
       return;
     }
-
-    final doseSummary = _composeDoseSummary();
-    if (doseSummary.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please add at least one dose line.')),
-      );
+    if (_powerController.text.trim().isEmpty) {
+      _showMessage(context.tr('power_required_error'));
       return;
+    }
+    final doses = _structuredDoses();
+    if (doses.length != _doseRows.length) {
+      _showMessage(context.tr('dose_line_required_error'));
+      return;
+    }
+    if (doses.map((dose) => dose.timeOfDay).toSet().length != doses.length) {
+      _showMessage(context.tr('duplicate_dose_time_error'));
+      return;
+    }
+    if (_scheduleFrequency == 'custom') {
+      final customDays = int.tryParse(_customIntervalController.text.trim());
+      if (customDays == null || customDays < 1 || customDays > 365) {
+        _showMessage(context.tr('custom_days_error'));
+        return;
+      }
+    }
+    if (_mealScheduleEnabled && _mealRelation != 'with') {
+      final minutes = int.tryParse(_mealMinutesController.text.trim());
+      if (minutes == null || minutes < 1 || minutes > 720) {
+        _showMessage(context.tr('meal_minutes_error'));
+        return;
+      }
+    }
+
+    if (_mealScheduleEnabled) {
+      final existingMedications = await _existingMedicationsFuture;
+      final conflict = findMealTimingConflict(
+        newDoseTimes: doses.map((dose) => dose.timeOfDay).toList(),
+        newMealOffset: _mealOffset,
+        existingMedications: existingMedications,
+        excludedMedicationId: widget.existingMedication?.id,
+      );
+      if (conflict != null) {
+        if (mounted) {
+          await _showMealConflict(conflict);
+        }
+        return;
+      }
     }
 
     setState(() => _busy = true);
     try {
       final now = DateTime.now();
       final existing = widget.existingMedication;
+      final doseSummary = doses.map((dose) => dose.summary).join(' • ');
       final medication = Medication(
         id: existing?.id ?? now.microsecondsSinceEpoch.toString(),
         medicineName: _medicineController.text.trim(),
-        formula: _formulaController.text.trim().isEmpty
-            ? null
-            : _formulaController.text.trim(),
-        companyName: _companyController.text.trim().isEmpty
-            ? null
-            : _companyController.text.trim(),
+        medicineType: _medicineType,
+        powerValue: _powerController.text.trim(),
+        powerUnit: _powerUnit,
+        languageCode: languageCode,
+        formula: _emptyToNull(_formulaController.text),
+        companyName: _emptyToNull(_companyController.text),
         imagePath: _imagePath ?? existing?.imagePath,
         imageBytesBase64: _imageBytes == null
             ? existing?.imageBytesBase64
             : base64Encode(_imageBytes!),
+        backupImageUrl: existing?.backupImageUrl,
         dose: doseSummary,
+        doses: doses,
+        doseTimes: doses.map((dose) => dose.timeOfDay).toList(growable: false),
         durationDays: 0,
-        timeOfDay: _canonicalTime(_selectedTime),
+        timeOfDay: doses.first.timeOfDay,
         mealOffset: _mealOffset,
-        notes: _notesController.text.trim().isEmpty
-            ? null
-            : _notesController.text.trim(),
-        isActive: _isActive,
+        mealScheduleEnabled: _mealScheduleEnabled,
+        mealTimes: _mealScheduleEnabled
+            ? _doseRows
+                  .map((row) => _canonicalTime(_mealTimeFor(row.time)))
+                  .toList(growable: false)
+            : const <String>[],
+        checkIns: existing?.checkIns ?? const <MedicationCheckIn>[],
+        scheduleFrequency: _scheduleFrequency,
+        customIntervalDays:
+            int.tryParse(_customIntervalController.text.trim()) ?? 1,
+        scheduleStartDate: existing?.scheduleStartDate ?? now,
+        notes: _emptyToNull(_notesController.text),
+        isActive: true,
         updatedAt: now,
       );
 
@@ -195,15 +327,12 @@ class _AddReminderPageState extends State<AddReminderPage> {
       } else {
         await widget.repository.update(uid: widget.uid, medication: medication);
       }
-
       if (mounted) {
         Navigator.of(context).pop(true);
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        _showMessage(error.toString());
       }
     } finally {
       if (mounted) {
@@ -212,18 +341,66 @@ class _AddReminderPageState extends State<AddReminderPage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isEditing = widget.existingMedication != null;
+  String? _emptyToNull(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(isEditing ? 'Edit Medicine' : 'Add Medicine'),
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _showMealConflict(MealTimingConflict conflict) {
+    final requested = _displayTime(_parseTime(conflict.requestedMealTime));
+    final existing = _displayTime(_parseTime(conflict.existingMealTime));
+    final suggested = _displayTime(_parseTime(conflict.suggestedMedicineTime));
+    return showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(context.tr('meal_timing_conflict_title')),
+        content: Text(
+          '${context.tr('meal_timing_conflict_requested')} $requested. '
+          '${context.tr('meal_timing_conflict_existing')} $existing. '
+          '${context.tr('meal_timing_conflict_fix')} $suggested.',
+        ),
         actions: [
           TextButton(
-            onPressed: widget.onSignOut,
-            child: const Text('Sign out'),
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(context.tr('understood')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(context.tr('use_suggested_time')),
+          ),
+        ],
+      ),
+    ).then((useSuggestedTime) {
+      if (useSuggestedTime != true || !mounted) {
+        return;
+      }
+      final rowIndex = _doseRows.indexWhere(
+        (row) => _canonicalTime(row.time) == conflict.requestedMedicineTime,
+      );
+      if (rowIndex >= 0) {
+        setState(() {
+          _doseRows[rowIndex].time = _parseTime(conflict.suggestedMedicineTime);
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isEditing = widget.existingMedication != null;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(context.tr(isEditing ? 'edit_medicine' : 'add_medicine')),
+        actions: const [
+          Padding(
+            padding: EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+            child: LanguageToggleButton(),
           ),
         ],
       ),
@@ -232,226 +409,326 @@ class _AddReminderPageState extends State<AddReminderPage> {
           padding: const EdgeInsets.all(16),
           children: [
             _HeaderCard(
-              title: isEditing
-                  ? 'Update medicine details'
-                  : 'Create a medicine reminder',
-              subtitle:
-                  'Keep the form simple, but let each dose be entered as a clear structured line.',
+              title: context.tr(
+                isEditing
+                    ? 'update_medicine_details'
+                    : 'create_medicine_reminder',
+              ),
             ),
             const SizedBox(height: 16),
             _SectionCard(
-              title: 'Medicine details',
+              title: context.tr('medicine_details'),
               child: Column(
                 children: [
                   TextField(
                     controller: _medicineController,
-                    decoration: const InputDecoration(
-                      labelText: 'Medicine name *',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: context.tr('medicine_name_required'),
+                      border: const OutlineInputBorder(),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    initialValue: _medicineType,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: context.tr('medicine_type'),
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: _medicineTypes
+                        .map(
+                          (type) => DropdownMenuItem(
+                            value: type,
+                            child: Text(context.tr(type)),
+                          ),
+                        )
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _medicineType = value;
+                          if (value == 'insulin') {
+                            _powerUnit = 'units/ml';
+                          } else if (_powerUnit == 'units/ml') {
+                            _powerUnit = 'mg';
+                          }
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 12),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final valueField = TextField(
+                        controller: _powerController,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: InputDecoration(
+                          labelText: context.tr('power_value'),
+                          border: const OutlineInputBorder(),
+                        ),
+                      );
+                      final unitField = DropdownButtonFormField<String>(
+                        key: ValueKey<String>('power-unit-$_medicineType'),
+                        initialValue: _powerUnit,
+                        isExpanded: true,
+                        decoration: InputDecoration(
+                          labelText: context.tr('power_unit'),
+                          border: const OutlineInputBorder(),
+                        ),
+                        items: _powerUnits
+                            .map(
+                              (unit) => DropdownMenuItem(
+                                value: unit,
+                                child: Text(unit),
+                              ),
+                            )
+                            .toList(growable: false),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _powerUnit = value);
+                          }
+                        },
+                      );
+                      if (constraints.maxWidth < 360) {
+                        return Column(
+                          children: [
+                            valueField,
+                            const SizedBox(height: 12),
+                            unitField,
+                          ],
+                        );
+                      }
+                      return Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(flex: 2, child: valueField),
+                          const SizedBox(width: 12),
+                          Expanded(child: unitField),
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _formulaController,
-                    decoration: const InputDecoration(
-                      labelText: 'Formula (optional)',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: context.tr('formula_optional'),
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _companyController,
-                    decoration: const InputDecoration(
-                      labelText: 'Company name (optional)',
-                      border: OutlineInputBorder(),
+                    decoration: InputDecoration(
+                      labelText: context.tr('company_optional'),
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _notesController,
-                    decoration: const InputDecoration(
-                      labelText: 'Notes (optional)',
-                      border: OutlineInputBorder(),
-                    ),
                     maxLines: 3,
+                    decoration: InputDecoration(
+                      labelText: context.tr('notes_optional'),
+                      border: const OutlineInputBorder(),
+                    ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 16),
             _SectionCard(
-              title: 'Dosage builder',
+              title: context.tr('dosage_builder'),
               trailing: TextButton.icon(
                 onPressed: _addDoseRow,
                 icon: const Icon(Icons.add),
-                label: const Text('Add dose line'),
+                label: Text(context.tr('add_dose_line')),
               ),
               child: Column(
+                children: List.generate(_doseRows.length, (index) {
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      bottom: index == _doseRows.length - 1 ? 0 : 12,
+                    ),
+                    child: _DoseRowEditor(
+                      row: _doseRows[index],
+                      index: index,
+                      dosageUnit: _localizedDosageUnit(context),
+                      canRemove: _doseRows.length > 1,
+                      onPickTime: () => _pickDoseTime(_doseRows[index]),
+                      onRemove: () => _removeDoseRow(index),
+                    ),
+                  );
+                }),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _SectionCard(
+              title: context.tr('repeat_schedule'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  ...List.generate(_doseRows.length, (index) {
-                    final row = _doseRows[index];
-                    return Padding(
-                      padding: EdgeInsets.only(
-                        bottom: index == _doseRows.length - 1 ? 0 : 12,
-                      ),
-                      child: _DoseRowEditor(
-                        row: row,
-                        index: index,
-                        canRemove: _doseRows.length > 1,
-                        onChanged: () => setState(() {}),
-                        onRemove: () => _removeDoseRow(index),
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 12),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                  DropdownButtonFormField<String>(
+                    initialValue: _scheduleFrequency,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: context.tr('repeat_medicine'),
+                      border: const OutlineInputBorder(),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Preview',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w800,
+                    items: _scheduleFrequencies
+                        .map(
+                          (frequency) => DropdownMenuItem(
+                            value: frequency,
+                            child: Text(context.tr(frequency)),
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _composeDoseSummary().isEmpty
-                              ? 'Dose summary will appear here.'
-                              : _composeDoseSummary(),
-                          style: const TextStyle(fontSize: 15, height: 1.35),
-                        ),
-                      ],
-                    ),
+                        )
+                        .toList(growable: false),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _scheduleFrequency = value);
+                      }
+                    },
                   ),
+                  if (_scheduleFrequency == 'custom') ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _customIntervalController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: context.tr('custom_repeat_days'),
+                        suffixText: context.tr('days'),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 16),
             _SectionCard(
-              title: 'Schedule & photo',
+              title: context.tr('meal_schedule'),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Semantics(
-                    button: true,
-                    label: 'Pick medicine reminder time',
-                    child: OutlinedButton.icon(
-                      onPressed: _pickTime,
-                      icon: const Icon(Icons.access_time),
-                      label: Text(
-                        'Reminder time: ${_selectedTime.format(context)}',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<int>(
-                    initialValue: _mealOffset,
-                    decoration: const InputDecoration(
-                      labelText: 'Meal offset',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: -30,
-                        child: Text('30 min before meal'),
-                      ),
-                      DropdownMenuItem(value: 0, child: Text('At meal time')),
-                      DropdownMenuItem(
-                        value: 30,
-                        child: Text('30 min after meal'),
-                      ),
-                    ],
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _mealScheduleEnabled,
+                    title: Text(context.tr('meal_schedule_enabled')),
+                    subtitle: Text(context.tr('meal_schedule_help')),
                     onChanged: (value) {
-                      if (value != null) {
-                        setState(() => _mealOffset = value);
-                      }
+                      setState(() => _mealScheduleEnabled = value);
                     },
                   ),
-                  const SizedBox(height: 12),
-                  Card(
-                    elevation: 0,
-                    color: const Color(0xFFF8FAFC),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
-                      side: const BorderSide(color: Color(0xFFE2E8F0)),
+                  if (_mealScheduleEnabled) ...[
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      initialValue: _mealRelation,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: context.tr('meal_relation'),
+                        border: const OutlineInputBorder(),
+                      ),
+                      items: [
+                        DropdownMenuItem(
+                          value: 'before',
+                          child: Text(context.tr('before_meal_custom')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'with',
+                          child: Text(context.tr('at_meal')),
+                        ),
+                        DropdownMenuItem(
+                          value: 'after',
+                          child: Text(context.tr('after_meal_custom')),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _mealRelation = value);
+                        }
+                      },
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            'Photo',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          if (_imageBytes != null)
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(14),
-                              child: Image.memory(
-                                _imageBytes!,
-                                height: 180,
-                                fit: BoxFit.cover,
-                              ),
-                            )
-                          else if ((_imagePath ?? '').isNotEmpty)
-                            Container(
-                              height: 180,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: const Text('Photo saved locally'),
-                            )
-                          else
-                            Container(
-                              height: 180,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              child: const Text('No photo selected'),
-                            ),
-                          const SizedBox(height: 12),
-                          FilledButton.tonalIcon(
-                            onPressed: _pickPhoto,
-                            icon: const Icon(Icons.camera_alt),
-                            label: const Text('Take photo'),
-                          ),
-                        ],
+                    if (_mealRelation != 'with') ...[
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _mealMinutesController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          labelText: context.tr('custom_meal_minutes'),
+                          suffixText: context.tr('minutes_short'),
+                          border: const OutlineInputBorder(),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    Text(
+                      context.tr('calculated_meal_times'),
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                    const SizedBox(height: 8),
+                    ..._doseRows.map(
+                      (row) => Padding(
+                        padding: const EdgeInsets.only(bottom: 6),
+                        child: Text(
+                          '${context.tr('medicine_at')} '
+                          '${_displayTime(row.time)} → '
+                          '${context.tr('meal_at')} '
+                          '${_displayTime(_mealTimeFor(row.time))}',
+                        ),
                       ),
                     ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            _SectionCard(
+              title: context.tr('photo'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_imageBytes != null)
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(14),
+                      child: Image.memory(
+                        _imageBytes!,
+                        height: 180,
+                        fit: BoxFit.cover,
+                      ),
+                    )
+                  else
+                    Container(
+                      height: 150,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: AppPalette.blush.withValues(alpha: 0.28),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Text(
+                        (_imagePath ?? '').isNotEmpty
+                            ? context.tr('photo_saved_locally')
+                            : context.tr('no_photo_selected'),
+                      ),
+                    ),
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: _pickPhoto,
+                    icon: const Icon(Icons.camera_alt),
+                    label: Text(context.tr('take_photo')),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 12),
-            SwitchListTile(
-              value: _isActive,
-              title: const Text('Active reminder'),
-              subtitle: const Text('Keep this medicine scheduled and notified'),
-              onChanged: (value) => setState(() => _isActive = value),
-            ),
             const SizedBox(height: 16),
-            Semantics(
-              button: true,
-              label: isEditing ? 'Update medicine' : 'Save medicine',
-              child: FilledButton(
-                onPressed: _busy ? null : _saveReminder,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  child: Text(isEditing ? 'Update Medicine' : 'Save Medicine'),
+            FilledButton(
+              onPressed: _busy ? null : _saveReminder,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: Text(
+                  context.tr(isEditing ? 'update_medicine' : 'save_medicine'),
                 ),
               ),
             ),
@@ -463,10 +740,9 @@ class _AddReminderPageState extends State<AddReminderPage> {
 }
 
 class _HeaderCard extends StatelessWidget {
-  const _HeaderCard({required this.title, required this.subtitle});
+  const _HeaderCard({required this.title});
 
   final String title;
-  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
@@ -474,33 +750,19 @@ class _HeaderCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0xFF0F766E), Color(0xFF2563EB)],
+          colors: [AppPalette.aubergine, AppPalette.persimmon],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(24),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            title,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            subtitle,
-            style: const TextStyle(
-              color: Colors.white70,
-              fontSize: 15,
-              height: 1.35,
-            ),
-          ),
-        ],
+      child: Text(
+        title,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 22,
+          fontWeight: FontWeight.w800,
+        ),
       ),
     );
   }
@@ -519,21 +781,23 @@ class _SectionCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(24),
-        side: BorderSide(color: Colors.grey.shade200),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.14)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 4,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
                 if (trailing != null) trailing!,
@@ -549,162 +813,111 @@ class _SectionCard extends StatelessWidget {
 }
 
 class _DoseRow {
-  _DoseRow() {
-    amountController = TextEditingController();
-    unit = _doseUnits.first;
-    timing = _doseTimings.first;
-    frequency = _doseFrequencies.first;
-  }
+  _DoseRow({required this.time, String dosage = ''})
+    : dosageController = TextEditingController(text: dosage);
 
-  _DoseRow.fromSummary(String summary) {
-    amountController = TextEditingController(text: summary);
-    unit = _doseUnits.first;
-    timing = _doseTimings.first;
-    frequency = _doseFrequencies.first;
-  }
+  TimeOfDay time;
+  final TextEditingController dosageController;
 
-  late final TextEditingController amountController;
-  late String unit;
-  late String timing;
-  late String frequency;
-
-  String get summary {
-    final amount = amountController.text.trim();
-    if (amount.isEmpty) {
-      return '';
-    }
-    return [
-      amount,
-      unit,
-      timing,
-      frequency,
-    ].where((value) => value.trim().isNotEmpty).join(' ').trim();
-  }
-
-  void dispose() {
-    amountController.dispose();
-  }
+  void dispose() => dosageController.dispose();
 }
 
-class _DoseRowEditor extends StatefulWidget {
+class _DoseRowEditor extends StatelessWidget {
   const _DoseRowEditor({
     required this.row,
     required this.index,
+    required this.dosageUnit,
     required this.canRemove,
-    required this.onChanged,
+    required this.onPickTime,
     required this.onRemove,
   });
 
   final _DoseRow row;
   final int index;
+  final String dosageUnit;
   final bool canRemove;
-  final VoidCallback onChanged;
+  final VoidCallback onPickTime;
   final VoidCallback onRemove;
-
-  @override
-  State<_DoseRowEditor> createState() => _DoseRowEditorState();
-}
-
-class _DoseRowEditorState extends State<_DoseRowEditor> {
-  @override
-  void initState() {
-    super.initState();
-    widget.row.amountController.addListener(_refresh);
-  }
-
-  @override
-  void dispose() {
-    widget.row.amountController.removeListener(_refresh);
-    super.dispose();
-  }
-
-  void _refresh() {
-    if (mounted) {
-      setState(() {});
-      widget.onChanged();
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
     return Card(
       elevation: 0,
-      color: const Color(0xFFF8FAFC),
+      color: AppPalette.blush.withValues(alpha: 0.24),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
-        side: const BorderSide(color: Color(0xFFE2E8F0)),
+        side: BorderSide(color: AppPalette.plum.withValues(alpha: 0.16)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
                 CircleAvatar(
                   radius: 14,
-                  backgroundColor: const Color(0xFF0F766E),
+                  backgroundColor: AppPalette.persimmon,
                   child: Text(
-                    '${widget.index + 1}',
+                    '${index + 1}',
                     style: const TextStyle(color: Colors.white, fontSize: 12),
                   ),
                 ),
                 const SizedBox(width: 10),
-                const Expanded(
+                Expanded(
                   child: Text(
-                    'Dose line',
-                    style: TextStyle(fontWeight: FontWeight.w700),
+                    context.tr('dose_line'),
+                    style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
                 ),
-                if (widget.canRemove)
+                if (canRemove)
                   IconButton(
-                    tooltip: 'Remove dose line',
-                    onPressed: widget.onRemove,
+                    tooltip: context.tr('remove_dose_line'),
+                    onPressed: onRemove,
                     icon: const Icon(Icons.remove_circle_outline),
                   ),
               ],
             ),
             const SizedBox(height: 10),
-            TextField(
-              controller: widget.row.amountController,
-              decoration: const InputDecoration(
-                labelText: 'Amount',
-                hintText: '1',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Wrap(
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                _ChoiceChipField(
-                  label: 'Unit',
-                  value: widget.row.unit,
-                  options: _doseUnits,
-                  onSelected: (value) => setState(() {
-                    widget.row.unit = value;
-                    widget.onChanged();
-                  }),
-                ),
-                _ChoiceChipField(
-                  label: 'When',
-                  value: widget.row.timing,
-                  options: _doseTimings,
-                  onSelected: (value) => setState(() {
-                    widget.row.timing = value;
-                    widget.onChanged();
-                  }),
-                ),
-                _ChoiceChipField(
-                  label: 'Frequency',
-                  value: widget.row.frequency,
-                  options: _doseFrequencies,
-                  onSelected: (value) => setState(() {
-                    widget.row.frequency = value;
-                    widget.onChanged();
-                  }),
-                ),
-              ],
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final timeButton = SizedBox(
+                  height: 56,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: onPickTime,
+                    icon: const Icon(Icons.access_time, size: 18),
+                    label: Text(
+                      MaterialLocalizations.of(
+                        context,
+                      ).formatTimeOfDay(row.time, alwaysUse24HourFormat: false),
+                      maxLines: 1,
+                      overflow: TextOverflow.fade,
+                    ),
+                  ),
+                );
+                final dosageField = TextField(
+                  controller: row.dosageController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: context.tr('dosage_value'),
+                    suffixText: dosageUnit,
+                    border: const OutlineInputBorder(),
+                  ),
+                );
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 5, child: timeButton),
+                    const SizedBox(width: 10),
+                    Expanded(flex: 6, child: dosageField),
+                  ],
+                );
+              },
             ),
           ],
         ),
@@ -713,68 +926,20 @@ class _DoseRowEditorState extends State<_DoseRowEditor> {
   }
 }
 
-class _ChoiceChipField extends StatelessWidget {
-  const _ChoiceChipField({
-    required this.label,
-    required this.value,
-    required this.options,
-    required this.onSelected,
-  });
-
-  final String label;
-  final String value;
-  final List<String> options;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 140,
-      child: DropdownButtonFormField<String>(
-        initialValue: value,
-        decoration: InputDecoration(
-          labelText: label,
-          border: const OutlineInputBorder(),
-        ),
-        items: options
-            .map(
-              (option) =>
-                  DropdownMenuItem<String>(value: option, child: Text(option)),
-            )
-            .toList(growable: false),
-        onChanged: (selected) {
-          if (selected != null) {
-            onSelected(selected);
-          }
-        },
-      ),
-    );
-  }
-}
-
-const List<String> _doseUnits = <String>[
+const List<String> _medicineTypes = <String>[
   'tablet',
   'capsule',
   'syrup',
-  'ml',
   'drop',
-  'sachet',
-  'spoon',
+  'insulin',
 ];
 
-const List<String> _doseTimings = <String>[
-  'before meal',
-  'after meal',
-  'morning',
-  'noon',
-  'night',
-  'bedtime',
-];
+const List<String> _powerUnits = <String>['mg', 'g', 'mcg', 'units/ml'];
 
-const List<String> _doseFrequencies = <String>[
-  'once',
-  'twice',
-  'three times',
-  'four times',
-  'as needed',
+const List<String> _scheduleFrequencies = <String>[
+  'daily',
+  'weekly',
+  'every15Days',
+  'monthly',
+  'custom',
 ];

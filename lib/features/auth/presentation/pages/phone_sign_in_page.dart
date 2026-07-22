@@ -1,6 +1,12 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:url_launcher/link.dart';
 
+import '../../../../core/localization/app_localization.dart';
 import '../../domain/auth_repository.dart';
+import '../../domain/bangladesh_phone_number.dart';
 
 class PhoneSignInPage extends StatefulWidget {
   const PhoneSignInPage({super.key, required this.authRepository});
@@ -12,10 +18,12 @@ class PhoneSignInPage extends StatefulWidget {
 }
 
 class _PhoneSignInPageState extends State<PhoneSignInPage> {
+  final _formKey = GlobalKey<FormState>();
   final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
   bool _busy = false;
   String? _verificationId;
+  String? _normalizedPhoneNumber;
 
   @override
   void dispose() {
@@ -25,27 +33,38 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
   }
 
   Future<void> _requestCode() async {
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      return;
+    }
+
+    final normalizedPhoneNumber = BangladeshPhoneNumber.normalize(
+      _phoneController.text,
+    );
+
     setState(() => _busy = true);
     try {
       await widget.authRepository.sendPhoneVerificationCode(
-        phoneNumber: _phoneController.text.trim(),
+        phoneNumber: normalizedPhoneNumber,
         onCodeSent: (verificationId) {
-          setState(() => _verificationId = verificationId);
+          if (mounted) {
+            setState(() {
+              _verificationId = verificationId;
+              _normalizedPhoneNumber = normalizedPhoneNumber;
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(context.tr('verification_sent'))),
+            );
+          }
         },
         onError: (errorMessage) {
-          throw StateError(errorMessage);
+          if (mounted) {
+            _showError(StateError(errorMessage));
+          }
         },
       );
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Verification code sent.')),
-        );
-      }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        _showError(error);
       }
     } finally {
       if (mounted) {
@@ -57,9 +76,15 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
   Future<void> _verify() async {
     final verificationId = _verificationId;
     if (verificationId == null || verificationId.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Request the verification code first.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(context.tr('request_code_first'))));
+      return;
+    }
+
+    final smsCode = _codeController.text.trim();
+    if (!RegExp(r'^\d{6}$').hasMatch(smsCode)) {
+      _showError(FormatException(context.tr('enter_six_digit_code')));
       return;
     }
 
@@ -67,16 +92,14 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
     try {
       await widget.authRepository.signInWithSmsCode(
         verificationId: verificationId,
-        smsCode: _codeController.text.trim(),
+        smsCode: smsCode,
       );
       if (mounted) {
         Navigator.of(context).pop();
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(error.toString())));
+        _showError(error);
       }
     } finally {
       if (mounted) {
@@ -85,49 +108,160 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
     }
   }
 
+  void _showError(Object error) {
+    if (!mounted) {
+      return;
+    }
+
+    if (error case FirebaseAuthException(:final code, :final message)) {
+      debugPrint('Firebase phone auth failed [$code]: $message');
+    }
+
+    final message = switch (error) {
+      FirebaseAuthException(:final code) => switch (code) {
+        'invalid-phone-number' => context.tr('invalid_phone'),
+        'billing-not-enabled' => context.tr('billing_required'),
+        'operation-not-allowed' => context.tr('phone_disabled'),
+        'sms-region-not-allowed' ||
+        'unsupported-country' => context.tr('region_blocked'),
+        'unauthorized-domain' => context.tr('unauthorized_domain'),
+        'invalid-app-credential' ||
+        'captcha-check-failed' => context.tr('browser_verification_failed'),
+        'too-many-requests' => context.tr('too_many_requests'),
+        'quota-exceeded' => context.tr('quota_exceeded'),
+        'invalid-verification-code' => context.tr('invalid_code'),
+        'session-expired' || 'code-expired' => context.tr('expired_code'),
+        _ => error.message ?? 'Authentication failed ($code).',
+      },
+      FormatException(:final message) => message,
+      StateError(:final message) => message,
+      _ => context.tr('auth_failed'),
+    };
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Phone Sign In')),
+      appBar: AppBar(title: Text(context.tr('phone_sign_in'))),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          TextField(
-            controller: _phoneController,
-            decoration: const InputDecoration(
-              labelText: 'Phone number',
-              helperText: 'Use +8801XXXXXXXXX format',
-              border: OutlineInputBorder(),
+          Form(
+            key: _formKey,
+            child: TextFormField(
+              controller: _phoneController,
+              decoration: InputDecoration(
+                labelText: context.tr('bangladesh_mobile_number'),
+                border: const OutlineInputBorder(),
+              ),
+              keyboardType: TextInputType.phone,
+              textInputAction: TextInputAction.done,
+              autofillHints: const [AutofillHints.telephoneNumber],
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9০-৯+\s\-()]')),
+              ],
+              validator: (value) {
+                try {
+                  BangladeshPhoneNumber.normalize(value ?? '');
+                  return null;
+                } on FormatException {
+                  return context.tr('invalid_phone');
+                }
+              },
+              onFieldSubmitted: (_) {
+                if (!_busy) {
+                  _requestCode();
+                }
+              },
             ),
-            keyboardType: TextInputType.phone,
           ),
           const SizedBox(height: 12),
           FilledButton(
             onPressed: _busy ? null : _requestCode,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Text('Send code'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Text(context.tr('send_code')),
             ),
           ),
+          if (_normalizedPhoneNumber case final phoneNumber?) ...[
+            const SizedBox(height: 12),
+            Text(
+              '${context.tr('code_sent_to')} $phoneNumber',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
           const SizedBox(height: 16),
           TextField(
             controller: _codeController,
-            decoration: const InputDecoration(
-              labelText: 'Verification code',
-              border: OutlineInputBorder(),
+            decoration: InputDecoration(
+              labelText: context.tr('verification_code'),
+              border: const OutlineInputBorder(),
             ),
             keyboardType: TextInputType.number,
+            autofillHints: const [AutofillHints.oneTimeCode],
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
           ),
           const SizedBox(height: 12),
           OutlinedButton(
             onPressed: _busy ? null : _verify,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: 14),
-              child: Text('Verify and sign in'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              child: Text(context.tr('verify_and_sign_in')),
             ),
           ),
+          if (kIsWeb) ...[
+            const SizedBox(height: 24),
+            const _RecaptchaDisclosure(),
+          ],
         ],
       ),
+    );
+  }
+}
+
+class _RecaptchaDisclosure extends StatelessWidget {
+  const _RecaptchaDisclosure();
+
+  @override
+  Widget build(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11);
+    final linkStyle = style?.copyWith(
+      decoration: TextDecoration.underline,
+      fontWeight: FontWeight.w700,
+    );
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 3,
+      children: [
+        Text(
+          'This site is protected by reCAPTCHA and the Google',
+          style: style,
+        ),
+        Link(
+          uri: Uri.parse('https://policies.google.com/privacy'),
+          target: LinkTarget.blank,
+          builder: (context, followLink) => InkWell(
+            onTap: followLink,
+            child: Text('Privacy Policy', style: linkStyle),
+          ),
+        ),
+        Text('and', style: style),
+        Link(
+          uri: Uri.parse('https://policies.google.com/terms'),
+          target: LinkTarget.blank,
+          builder: (context, followLink) => InkWell(
+            onTap: followLink,
+            child: Text('Terms of Service', style: linkStyle),
+          ),
+        ),
+        Text('apply.', style: style),
+      ],
     );
   }
 }

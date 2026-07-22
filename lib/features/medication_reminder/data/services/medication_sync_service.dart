@@ -8,7 +8,6 @@ import 'package:flutter/foundation.dart';
 import '../datasources/medication_local_data_source.dart';
 import '../datasources/medication_remote_data_source.dart';
 import '../../domain/models/medication.dart';
-import 'medication_notification_service.dart';
 
 class MedicationSyncService {
   MedicationSyncService({
@@ -16,18 +15,25 @@ class MedicationSyncService {
     required FirebaseStorage storage,
     required MedicationLocalDataSource localDataSource,
     required MedicationRemoteDataSource remoteDataSource,
-    required MedicationNotificationService notificationService,
   }) : _firestore = firestore,
        _storage = storage,
        _localDataSource = localDataSource,
-       _remoteDataSource = remoteDataSource,
-       _notificationService = notificationService;
+       _remoteDataSource = remoteDataSource;
 
   final FirebaseFirestore _firestore;
   final FirebaseStorage _storage;
   final MedicationLocalDataSource _localDataSource;
   final MedicationRemoteDataSource _remoteDataSource;
-  final MedicationNotificationService _notificationService;
+  Future<void>? _backupInFlight;
+
+  void queueBackup({required String uid}) {
+    unawaited(
+      backup(uid: uid).catchError((Object error, StackTrace stackTrace) {
+        debugPrint('Medication backup deferred: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }),
+    );
+  }
 
   void queuePush({
     required String uid,
@@ -50,18 +56,13 @@ class MedicationSyncService {
             medication: medication,
           );
         case SyncOperation.delete:
-          await _remoteDataSource.deleteMedication(medication.id);
+          await _remoteDataSource.deleteMedication(uid: uid, id: medication.id);
+          await _localDataSource.clearPendingDeletion(medication.id);
       }
     } catch (error, stackTrace) {
       debugPrint('Medication sync failed: $error');
       debugPrintStack(stackTrace: stackTrace);
     }
-  }
-
-  Future<void> syncFromCloud({required String uid}) async {
-    final remoteMedications = await _remoteDataSource.fetchForUser(uid);
-    await _localDataSource.replaceAll(remoteMedications);
-    await _notificationService.rescheduleAll(remoteMedications);
   }
 
   Future<String> uploadMedicationPhoto({
@@ -73,21 +74,36 @@ class MedicationSyncService {
         ? fileName
         : 'medicine_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final ref = _storage.ref('medication_images/$userId/$safeFileName');
-    await ref.putData(fileBytes);
-    return ref.getDownloadURL();
+    await ref
+        .putData(fileBytes, SettableMetadata(contentType: 'image/jpeg'))
+        .timeout(const Duration(seconds: 30));
+    return ref.getDownloadURL().timeout(const Duration(seconds: 20));
   }
 
   Future<void> backupLocalToCloud({required String uid}) async {
+    final pendingDeletionIds = await _localDataSource.getPendingDeletionIds();
+    for (final id in pendingDeletionIds) {
+      await _remoteDataSource
+          .deleteMedication(uid: uid, id: id)
+          .timeout(const Duration(seconds: 20));
+      await _localDataSource.clearPendingDeletion(id);
+    }
+
     final localMedications = await _localDataSource.getAll();
     for (final medication in localMedications) {
       final cloudImageUrl = await _uploadMedicationImageIfNeeded(
         userId: uid,
         medication: medication,
       );
-      await _remoteDataSource.upsertMedication(
-        uid: uid,
-        medication: medication.copyWith(backupImageUrl: cloudImageUrl),
+      final backedUpMedication = medication.copyWith(
+        backupImageUrl: cloudImageUrl,
       );
+      await _remoteDataSource
+          .upsertMedication(uid: uid, medication: backedUpMedication)
+          .timeout(const Duration(seconds: 20));
+      if (cloudImageUrl != medication.backupImageUrl) {
+        await _localDataSource.save(backedUpMedication);
+      }
     }
   }
 
@@ -113,9 +129,25 @@ class MedicationSyncService {
     );
   }
 
-  Future<void> ensureSyncedOnLogin({required String uid}) async {
+  Future<void> backup({required String uid}) async {
+    final running = _backupInFlight;
+    if (running != null) {
+      return running;
+    }
+
+    late final Future<void> operation;
+    operation = _backup(uid).whenComplete(() {
+      if (identical(_backupInFlight, operation)) {
+        _backupInFlight = null;
+      }
+    });
+    _backupInFlight = operation;
+    return operation;
+  }
+
+  Future<void> _backup(String uid) async {
     await _firestore.enableNetwork();
-    await syncFromCloud(uid: uid);
+    await backupLocalToCloud(uid: uid);
   }
 }
 
