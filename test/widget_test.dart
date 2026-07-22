@@ -7,7 +7,9 @@ import 'package:medimind/features/auth/domain/app_user.dart';
 import 'package:medimind/features/auth/domain/auth_repository.dart';
 import 'package:medimind/features/auth/data/session_activity_store.dart';
 import 'package:medimind/features/medication_reminder/domain/models/medication.dart';
+import 'package:medimind/features/medication_reminder/domain/models/medication_report.dart';
 import 'package:medimind/features/medication_reminder/domain/repositories/medication_repository.dart';
+import 'package:medimind/features/medication_reminder/domain/services/medication_report_builder.dart';
 
 class FakeMedicationRepository implements MedicationRepository {
   FakeMedicationRepository({this.medications = const <Medication>[]});
@@ -32,6 +34,13 @@ class FakeMedicationRepository implements MedicationRepository {
 
   @override
   Future<Medication?> getById(String id) async => null;
+
+  @override
+  Future<MedicationReport> getReport({
+    required String uid,
+    required int rangeDays,
+  }) async =>
+      buildMedicationReport(medications: medications, rangeDays: rangeDays);
 
   @override
   Future<void> backupToCloud({required String uid}) async {}
@@ -197,6 +206,8 @@ void main() {
       durationDays: 0,
       timeOfDay: '09:00',
       mealOffset: 0,
+      imageBytesBase64:
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
       isActive: true,
       updatedAt: DateTime.now(),
     );
@@ -214,6 +225,14 @@ void main() {
     expect(find.text('ব্যাকআপ নিন'), findsOneWidget);
     expect(find.text('ওষুধ যোগ করুন'), findsOneWidget);
     expect(find.text('ঢাকা, বাংলাদেশ'), findsNothing);
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -700));
+    await tester.pumpAndSettle();
+    final artwork = find.byKey(const ValueKey('medicine-artwork-one'));
+    expect(artwork, findsOneWidget);
+    expect(
+      find.descendant(of: artwork, matching: find.byType(Image)),
+      findsOneWidget,
+    );
   });
 
   testWidgets('medicine form is responsive and uses time plus dosage', (
@@ -352,5 +371,80 @@ void main() {
     expect(repository.lastUpdated, isNotNull);
     expect(repository.lastUpdated!.checkIns.single.medicineStatus, 'taken');
     expect(repository.lastUpdated!.checkIns.single.medicineTakenAt, isNotNull);
+  });
+
+  testWidgets('dashboard shows ordered events and opens a ranged report', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final now = DateTime.now();
+    final doseTime =
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+    final medicine = Medication(
+      id: 'report-medicine',
+      medicineName: 'Napa',
+      dose: '1 pill',
+      doses: [
+        MedicationDose(
+          timeOfDay: doseTime,
+          dosageValue: '1',
+          dosageUnit: 'pill',
+        ),
+      ],
+      durationDays: 0,
+      timeOfDay: doseTime,
+      mealOffset: 0,
+      mealScheduleEnabled: true,
+      checkIns: [
+        MedicationCheckIn(
+          dateKey: medicationDateKey(now),
+          doseTime: doseTime,
+          medicineStatus: 'taken',
+          mealStatus: 'taken',
+          medicineTakenAt: now,
+          mealTakenAt: now,
+          takenWithMeal: true,
+        ),
+      ],
+      isActive: true,
+      updatedAt: now,
+    );
+
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: FakeMedicationRepository(medications: [medicine]),
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'test-user', displayName: 'Test User'),
+        ),
+        sessionActivityStore: FakeSessionActivityStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('next-event-dot')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hero-weekday')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hero-date')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hero-current-event')), findsOneWidget);
+    expect(find.byKey(const ValueKey('hero-now-time')), findsOneWidget);
+
+    await tester.tap(find.text('Eng'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.assessment_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Reports'), findsOneWidget);
+    expect(find.text('Last 7 days'), findsOneWidget);
+    expect(find.text('Report period'), findsOneWidget);
+    expect(find.text('Medicines taken'), findsOneWidget);
+    expect(find.text('Meals taken'), findsOneWidget);
+    expect(find.text('Napa'), findsOneWidget);
+
+    await tester.tap(find.text('Last 30 days'));
+    await tester.pumpAndSettle();
+    expect(find.text('Detailed history'), findsOneWidget);
   });
 }

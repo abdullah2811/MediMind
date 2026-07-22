@@ -23,12 +23,19 @@ The application currently targets Android, iOS, and the web.
 - Custom before-meal and after-meal offsets, defaulting to 20 minutes.
 - Medicine and meal taken/not-taken tracking, including the actual time and
   whether a late dose was taken with food.
-- Optional medicine photos.
+- Optional medicine photos shown prominently on dashboard cards and Android
+  notifications.
 - High-priority local notifications in the language used when the
-  medicine was saved.
+  medicine was saved, with Android actions for recording medicine and meal
+  taken/not-taken status without opening the app.
 - Collision-safe reminder planning that merges events scheduled for the same
   minute and rejects contradictory nearby meal anchors.
-- A dashboard showing the next medicine and a dynamic 24-hour day-cycle arc.
+- A dashboard showing the next medicine/meal events in chronological order,
+  beginning at the top-right of the hero card, with weekday/date headings,
+  the live current time, and a dynamic day-cycle arc whose event dots change
+  after their times pass.
+- Detailed local-first 7-day and 30-day reports with scheduled times, actual
+  medicine/meal times, taken/not-taken status, and owner-only cloud snapshots.
 - Local-first storage using Hive.
 - Automatic Firebase backup after medicines are added or updated.
 - Automatic backup retry when network connectivity returns.
@@ -216,10 +223,12 @@ The application stores each user's medicine documents under:
 
 ```text
 users/{userId}/reminders/{reminderId}
+users/{userId}/reports/{reportId}
 ```
 
 The checked-in `firestore.rules` file only permits the authenticated owner to
-access that path and validates the document's `uid` and `reminderId` fields.
+access those paths and validates the owner and document identifiers. Report
+documents are restricted to the supported 7-day and 30-day ranges.
 The path-scoped design also permits safe deletion of a backup that does not yet
 exist without allowing one user to delete another user's data.
 
@@ -233,6 +242,15 @@ medication_images/{userId}/{medicineId}.jpg
 
 The checked-in `storage.rules` file permits owner-only access and restricts
 uploads to images smaller than 10 MB.
+
+Photos are optional and are used only as a visual identification aid. The
+compressed image bytes are stored with the local Hive medicine record so the
+dashboard and notification scheduler do not depend on internet access. During
+backup, the image file is uploaded to Firebase Storage and Firestore stores its
+download URL in the corresponding reminder document; Firestore does not store
+the image bytes themselves. Replacing a photo uploads the new image, and
+deleting a medicine removes its predictable Storage object during the next
+successful backup.
 
 Deploy both rulesets after signing in to the Firebase CLI:
 
@@ -262,7 +280,7 @@ manifest:
 
 The main manifest declares notification, vibration, exact-alarm, reboot, and
 full-screen-intent permissions. It also registers the scheduled-notification
-and reboot receivers required by `flutter_local_notifications`. The app asks
+action, and reboot receivers required by `flutter_local_notifications`. The app asks
 for notification, exact-alarm, and full-screen-intent access where supported.
 Review current Google Play policy requirements before publishing an application
 that requests exact alarms or full-screen intents.
@@ -291,16 +309,22 @@ truth; automatic synchronization never replaces local data with cloud data.
 3. A cloud backup is requested in the background.
 4. If the device is offline, the local record remains available and usable.
 5. Connectivity changes are monitored while the signed-in dashboard is open.
-6. When a network connection becomes available, local medicines and pending
-   deletions are uploaded to the user's cloud backup.
+6. Rolling 7-day and 30-day report snapshots are generated and stored in a
+   separate Hive box from the same local check-in history.
+7. When a network connection becomes available, local medicines, reports, and
+   pending deletions are uploaded to the user's cloud backup.
 
-The app also retries synchronization every 30 seconds while a network
-connection is reported. A network connection does not always guarantee working
-internet access, so upload failures are handled and retried instead of deleting
-local data.
+The dashboard checks periodically for pending synchronization while a network
+connection is reported. Actual uploads are serialized into one operation.
+Transient failures use an increasing cooldown, while Firestore
+`permission-denied` and internal-client assertion errors pause automatic cloud
+attempts for the signed-in session. This prevents a broken cloud configuration
+from creating a retry storm; local data and reminders continue to work.
 
 Offline deletions are stored as local tombstones. They are sent to Firestore
 before the next backup upload so the online backup matches the local database.
+Report entries already recorded within their time range are retained even if a
+medicine is later deleted.
 
 The manual **Backup** button remains available when at least one medicine
 exists. If manual backup fails because the device is offline, the app confirms
@@ -363,6 +387,37 @@ notifications are restored after a device reboot. iOS notifications use the
 Time Sensitive interruption level and may ask users to allow alert, badge, and
 sound permissions. Clock controls and displayed reminder times use a 12-hour
 format.
+
+Android medicine-only and meal-only reminders provide taken/not-taken action
+buttons. When a medicine and meal share one reminder minute, Android shows
+**All taken** and **None taken** so the single merged notification remains
+unambiguous. These actions update Hive and local reports in a background
+workflow: Android first persists the action while the app is sleeping, then
+MediMind applies it to Hive and local reports when the app starts or resumes.
+The result is uploaded during the next successful backup. Notification action
+buttons are not available in the web build.
+
+When a local medicine photo exists, Android uses it as the notification's large
+icon and shows it as expanded artwork for a single-medicine reminder. If a
+merged reminder contains several medicines, one available photo is kept as the
+compact large icon while the text lists every affected medicine.
+
+## Reports
+
+Open reports from the chart icon in the dashboard app bar. Each report has a
+fixed, visible period: the current calendar day plus the preceding 6 or 29
+calendar days. Reports are rebuilt from local check-ins, so opening and reading
+them never depends on internet access.
+
+Each entry includes the medicine name and dosage, scheduled dose time,
+medicine taken/not-taken status, actual medicine time, meal taken/not-taken
+status, actual meal time, and whether the medicine was taken with food. The two
+rolling snapshots are mirrored to Firestore at:
+
+```text
+users/{userId}/reports/last_7_days
+users/{userId}/reports/last_30_days
+```
 
 ## Localization and design
 
@@ -437,6 +492,8 @@ The test suite covers:
 - Debug and release Firebase test-mode safeguards.
 - Medication serialization and legacy-data compatibility.
 - All recurrence rules and date-specific notification planning.
+- Ordered dashboard event sequencing for medicine and meal reminders.
+- Local report ranges, detailed actual-time entries, and retained history.
 - Meal-time calculation and contradictory meal-window prevention.
 - Offline deletion persistence.
 - Bengali-first login and language switching.
@@ -541,7 +598,21 @@ configured fictional test number for development.
 ### Cloud backup does not complete
 
 - Confirm that the user is still signed in.
-- Check Firestore and Storage security rules.
+- Deploy the repository's owner-only Firestore rules:
+
+  ```powershell
+  firebase deploy --only firestore:rules --project medimind-368ed
+  ```
+
+- Fully restart the app, then press **Backup** once to resume a cloud session
+  that was paused after `permission-denied`.
+- If the web build still reports a Firestore internal assertion after rules are
+  deployed, first confirm that the local records have backed up successfully,
+  then close its browser tab and clear that site's stored data before reopening
+  it. Clearing site data resets stale Firestore web-client state but also erases
+  that browser's Hive/IndexedDB records; it does not erase records stored in a
+  native Android installation.
+- Check Firestore and Storage security rules if photo upload alone fails.
 - Check Firebase quotas and billing.
 - Confirm that the network has actual internet access, not only a Wi-Fi or
   cellular connection indicator.

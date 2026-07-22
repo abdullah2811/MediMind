@@ -3,23 +3,30 @@ import 'dart:async';
 import 'package:connectivity_plus/connectivity_plus.dart';
 
 import '../../domain/models/medication.dart';
+import '../../domain/models/medication_report.dart';
 import '../../domain/repositories/medication_repository.dart';
+import '../../domain/services/medication_report_builder.dart';
 import '../datasources/medication_local_data_source.dart';
+import '../datasources/medication_report_local_data_source.dart';
+import '../services/medication_notification_action_handler.dart';
 import '../services/medication_notification_service.dart';
 import '../services/medication_sync_service.dart';
 
 class MedicationRepositoryImpl implements MedicationRepository {
   MedicationRepositoryImpl({
     required MedicationLocalDataSource localDataSource,
+    required MedicationReportLocalDataSource reportLocalDataSource,
     required MedicationSyncService syncService,
     required MedicationNotificationService notificationService,
     required Connectivity connectivity,
   }) : _localDataSource = localDataSource,
+       _reportLocalDataSource = reportLocalDataSource,
        _syncService = syncService,
        _notificationService = notificationService,
        _connectivity = connectivity;
 
   final MedicationLocalDataSource _localDataSource;
+  final MedicationReportLocalDataSource _reportLocalDataSource;
   final MedicationSyncService _syncService;
   final MedicationNotificationService _notificationService;
   final Connectivity _connectivity;
@@ -34,26 +41,22 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required Medication medication,
   }) async {
     await _localDataSource.save(medication);
-    await _rescheduleLocalNotifications();
+    await _refreshReports(uid: uid);
+    await _rescheduleLocalNotifications(uid: uid);
     _syncService.queueBackup(uid: uid);
   }
 
   @override
   Future<void> delete({required String uid, required String id}) async {
-    final medication = await _localDataSource.getById(id);
     await _localDataSource.delete(id);
-    await _rescheduleLocalNotifications();
-    if (medication != null) {
-      _syncService.queuePush(
-        uid: uid,
-        medication: medication,
-        operation: SyncOperation.delete,
-      );
-    }
+    await _refreshReports(uid: uid);
+    await _rescheduleLocalNotifications(uid: uid);
+    _syncService.queueBackup(uid: uid);
   }
 
   @override
   Future<List<Medication>> getAll({required String uid}) async {
+    await _applyPendingNotificationActions(uid);
     return _localDataSource.getAll();
   }
 
@@ -64,7 +67,30 @@ class MedicationRepositoryImpl implements MedicationRepository {
 
   @override
   Future<void> backupToCloud({required String uid}) async {
+    await _refreshReports(uid: uid, queueCloudBackup: false);
+    _syncService.resumeCloudBackups();
     await _syncService.backup(uid: uid);
+  }
+
+  @override
+  Future<MedicationReport> getReport({
+    required String uid,
+    required int rangeDays,
+  }) async {
+    await _applyPendingNotificationActions(uid);
+    final medications = await _localDataSource.getAll();
+    final previous = await _reportLocalDataSource.get(
+      uid: uid,
+      rangeDays: rangeDays,
+    );
+    final report = buildMedicationReport(
+      medications: medications,
+      rangeDays: rangeDays,
+      previousReport: previous,
+    );
+    await _reportLocalDataSource.save(uid: uid, report: report);
+    _syncService.queueBackup(uid: uid);
+    return report;
   }
 
   @override
@@ -73,20 +99,25 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required Medication medication,
   }) async {
     await _localDataSource.save(medication);
-    await _rescheduleLocalNotifications();
+    await _refreshReports(uid: uid);
+    await _rescheduleLocalNotifications(uid: uid);
     _syncService.queueBackup(uid: uid);
   }
 
   @override
   Future<void> startAutoSync({required String uid}) async {
     await stopAutoSync();
-    await _rescheduleLocalNotifications();
+    await _applyPendingNotificationActions(uid);
+    _syncService.startSession(uid);
+    await _refreshReports(uid: uid, queueCloudBackup: false);
+    await _rescheduleLocalNotifications(uid: uid);
     _autoSyncUid = uid;
     _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
       results,
     ) {
       _hasNetworkConnection = _isConnected(results);
       if (_hasNetworkConnection) {
+        _syncService.notifyConnectivityRestored();
         _syncService.queueBackup(uid: uid);
       }
     });
@@ -99,11 +130,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     final current = await _connectivity.checkConnectivity();
     _hasNetworkConnection = _isConnected(current);
     if (_hasNetworkConnection) {
-      try {
-        await _syncService.backup(uid: uid);
-      } catch (_) {
-        // Local data is already durable. The listener/timer retries later.
-      }
+      _syncService.queueBackup(uid: uid);
     }
   }
 
@@ -121,13 +148,43 @@ class MedicationRepositoryImpl implements MedicationRepository {
     return results.any((result) => result != ConnectivityResult.none);
   }
 
-  Future<void> _rescheduleLocalNotifications() async {
+  Future<void> _applyPendingNotificationActions(String uid) async {
+    await applyPendingMedicationNotificationActions(
+      uid: uid,
+      localDataSource: _localDataSource,
+      reportLocalDataSource: _reportLocalDataSource,
+    );
+  }
+
+  Future<void> _rescheduleLocalNotifications({required String uid}) async {
     final medications = await _localDataSource.getAll();
     try {
-      await _notificationService.rescheduleAll(medications);
+      await _notificationService.rescheduleAll(medications, uid: uid);
     } catch (_) {
       // The local database is the source of truth. Notification permission or
       // platform failures must never make a successful local save look failed.
+    }
+  }
+
+  Future<void> _refreshReports({
+    required String uid,
+    bool queueCloudBackup = true,
+  }) async {
+    final medications = await _localDataSource.getAll();
+    for (final rangeDays in medicationReportRanges) {
+      final previous = await _reportLocalDataSource.get(
+        uid: uid,
+        rangeDays: rangeDays,
+      );
+      final report = buildMedicationReport(
+        medications: medications,
+        rangeDays: rangeDays,
+        previousReport: previous,
+      );
+      await _reportLocalDataSource.save(uid: uid, report: report);
+      if (queueCloudBackup) {
+        _syncService.queueBackup(uid: uid);
+      }
     }
   }
 }

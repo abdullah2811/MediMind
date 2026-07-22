@@ -53,7 +53,7 @@ void main() {
     );
     expect(mealEvent.hasMedicine, isFalse);
     expect(
-      mealEvent.meals.map((item) => item.id),
+      mealEvent.meals.map((item) => item.medication.id),
       containsAll(['Before', 'After']),
     );
   });

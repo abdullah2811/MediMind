@@ -6,6 +6,8 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
 import '../datasources/medication_local_data_source.dart';
+import '../datasources/medication_report_local_data_source.dart';
+import '../datasources/medication_report_remote_data_source.dart';
 import '../datasources/medication_remote_data_source.dart';
 import '../../domain/models/medication.dart';
 
@@ -14,55 +16,56 @@ class MedicationSyncService {
     required FirebaseFirestore firestore,
     required FirebaseStorage storage,
     required MedicationLocalDataSource localDataSource,
+    required MedicationReportLocalDataSource reportLocalDataSource,
+    required MedicationReportRemoteDataSource reportRemoteDataSource,
     required MedicationRemoteDataSource remoteDataSource,
-  }) : _firestore = firestore,
-       _storage = storage,
+  }) : _storage = storage,
        _localDataSource = localDataSource,
+       _reportLocalDataSource = reportLocalDataSource,
+       _reportRemoteDataSource = reportRemoteDataSource,
        _remoteDataSource = remoteDataSource;
 
-  final FirebaseFirestore _firestore;
   final FirebaseStorage _storage;
   final MedicationLocalDataSource _localDataSource;
+  final MedicationReportLocalDataSource _reportLocalDataSource;
+  final MedicationReportRemoteDataSource _reportRemoteDataSource;
   final MedicationRemoteDataSource _remoteDataSource;
   Future<void>? _backupInFlight;
+  String? _sessionUid;
+  DateTime? _retryAfter;
+  int _failureCount = 0;
+  bool _cloudBackupPaused = false;
+  bool _pauseWasLogged = false;
+
+  void startSession(String uid) {
+    if (_sessionUid == uid) {
+      return;
+    }
+    _sessionUid = uid;
+    resumeCloudBackups();
+  }
+
+  void notifyConnectivityRestored() {
+    if (_cloudBackupPaused) {
+      return;
+    }
+    _failureCount = 0;
+    _retryAfter = null;
+  }
+
+  void resumeCloudBackups() {
+    _cloudBackupPaused = false;
+    _pauseWasLogged = false;
+    _failureCount = 0;
+    _retryAfter = null;
+  }
 
   void queueBackup({required String uid}) {
-    unawaited(
-      backup(uid: uid).catchError((Object error, StackTrace stackTrace) {
-        debugPrint('Medication backup deferred: $error');
-        debugPrintStack(stackTrace: stackTrace);
-      }),
-    );
-  }
-
-  void queuePush({
-    required String uid,
-    required Medication medication,
-    required SyncOperation operation,
-  }) {
-    unawaited(_push(uid: uid, medication: medication, operation: operation));
-  }
-
-  Future<void> _push({
-    required String uid,
-    required Medication medication,
-    required SyncOperation operation,
-  }) async {
-    try {
-      switch (operation) {
-        case SyncOperation.upsert:
-          await _remoteDataSource.upsertMedication(
-            uid: uid,
-            medication: medication,
-          );
-        case SyncOperation.delete:
-          await _remoteDataSource.deleteMedication(uid: uid, id: medication.id);
-          await _localDataSource.clearPendingDeletion(medication.id);
-      }
-    } catch (error, stackTrace) {
-      debugPrint('Medication sync failed: $error');
-      debugPrintStack(stackTrace: stackTrace);
+    startSession(uid);
+    if (_cloudBackupPaused || (_retryAfter?.isAfter(DateTime.now()) ?? false)) {
+      return;
     }
+    unawaited(backup(uid: uid).catchError((Object _, StackTrace __) {}));
   }
 
   Future<String> uploadMedicationPhoto({
@@ -86,6 +89,7 @@ class MedicationSyncService {
       await _remoteDataSource
           .deleteMedication(uid: uid, id: id)
           .timeout(const Duration(seconds: 20));
+      await _deleteMedicationPhotoIfPresent(userId: uid, medicationId: id);
       await _localDataSource.clearPendingDeletion(id);
     }
 
@@ -103,6 +107,29 @@ class MedicationSyncService {
           .timeout(const Duration(seconds: 20));
       if (cloudImageUrl != medication.backupImageUrl) {
         await _localDataSource.save(backedUpMedication);
+      }
+    }
+
+    final reports = await _reportLocalDataSource.getAll(uid: uid);
+    for (final report in reports) {
+      await _reportRemoteDataSource
+          .upsertReport(uid: uid, report: report)
+          .timeout(const Duration(seconds: 20));
+    }
+  }
+
+  Future<void> _deleteMedicationPhotoIfPresent({
+    required String userId,
+    required String medicationId,
+  }) async {
+    try {
+      await _storage
+          .ref('medication_images/$userId/$medicationId.jpg')
+          .delete()
+          .timeout(const Duration(seconds: 20));
+    } on FirebaseException catch (error) {
+      if (error.code != 'object-not-found') {
+        rethrow;
       }
     }
   }
@@ -136,19 +163,61 @@ class MedicationSyncService {
     }
 
     late final Future<void> operation;
-    operation = _backup(uid).whenComplete(() {
-      if (identical(_backupInFlight, operation)) {
-        _backupInFlight = null;
-      }
-    });
+    operation = _backup(uid)
+        .then((_) {
+          _failureCount = 0;
+          _retryAfter = null;
+        })
+        .onError((Object error, StackTrace stackTrace) {
+          _recordBackupFailure(error);
+          Error.throwWithStackTrace(error, stackTrace);
+        })
+        .whenComplete(() {
+          if (identical(_backupInFlight, operation)) {
+            _backupInFlight = null;
+          }
+        });
     _backupInFlight = operation;
     return operation;
   }
 
   Future<void> _backup(String uid) async {
-    await _firestore.enableNetwork();
     await backupLocalToCloud(uid: uid);
   }
-}
 
-enum SyncOperation { upsert, delete }
+  void _recordBackupFailure(Object error) {
+    if (_isPermissionDenied(error) || _isFirestoreInternalAssertion(error)) {
+      _cloudBackupPaused = true;
+      _retryAfter = null;
+      if (!_pauseWasLogged) {
+        final reason = _isPermissionDenied(error)
+            ? 'Firestore denied access. Deploy the project rules and use the '
+                  'Backup button to retry.'
+            : 'the Firestore web client entered an invalid state. Restart the '
+                  'app after correcting Firebase access, then retry Backup.';
+        debugPrint('Medication cloud backup paused: $reason');
+        _pauseWasLogged = true;
+      }
+      return;
+    }
+
+    _failureCount = (_failureCount + 1).clamp(1, 5);
+    final delay = Duration(minutes: 1 << (_failureCount - 1));
+    _retryAfter = DateTime.now().add(delay);
+    debugPrint(
+      'Medication cloud backup deferred for ${delay.inMinutes} minute(s): '
+      '$error',
+    );
+  }
+
+  bool _isPermissionDenied(Object error) {
+    return error is FirebaseException && error.code == 'permission-denied' ||
+        error.toString().contains('permission-denied');
+  }
+
+  bool _isFirestoreInternalAssertion(Object error) {
+    final message = error.toString();
+    return message.contains('FIRESTORE') &&
+        message.contains('INTERNAL ASSERTION FAILED');
+  }
+}

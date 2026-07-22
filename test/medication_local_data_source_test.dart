@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive/hive.dart';
 import 'package:medimind/features/medication_reminder/data/datasources/medication_local_data_source.dart';
+import 'package:medimind/features/medication_reminder/data/datasources/medication_report_local_data_source.dart';
 import 'package:medimind/features/medication_reminder/domain/models/medication.dart';
+import 'package:medimind/features/medication_reminder/domain/models/medication_report.dart';
 
 void main() {
   late Directory tempDirectory;
@@ -40,5 +42,35 @@ void main() {
     await source.save(medication);
     expect(await source.getPendingDeletionIds(), isEmpty);
     expect((await source.getAll()).single.id, 'medicine-1');
+  });
+
+  test('reports are persisted locally per account and range', () async {
+    final source = MedicationReportLocalDataSource(boxName: 'local-reports');
+    final report = MedicationReport(
+      id: 'last_7_days',
+      rangeDays: 7,
+      periodStart: DateTime(2026, 7, 16),
+      periodEnd: DateTime(2026, 7, 22, 23, 59, 59, 999),
+      generatedAt: DateTime(2026, 7, 22, 12),
+      entries: [
+        MedicationReportEntry(
+          id: 'medicine-1|2026-07-22|09:00',
+          medicationId: 'medicine-1',
+          medicineName: 'Napa',
+          doseLabel: '1 pill',
+          scheduledAt: DateTime(2026, 7, 22, 9),
+          medicineStatus: 'taken',
+          medicineTakenAt: DateTime(2026, 7, 22, 9, 5),
+        ),
+      ],
+    );
+
+    await source.save(uid: 'owner-1', report: report);
+
+    final restored = await source.get(uid: 'owner-1', rangeDays: 7);
+    expect(restored, isNotNull);
+    expect(restored!.entries.single.medicineName, 'Napa');
+    expect(await source.get(uid: 'owner-2', rangeDays: 7), isNull);
+    expect(await source.getAll(uid: 'owner-1'), hasLength(1));
   });
 }
