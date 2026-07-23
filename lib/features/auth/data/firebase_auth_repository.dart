@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
@@ -42,19 +44,33 @@ class FirebaseAuthRepository implements AuthRepository {
       return;
     }
 
+    final requestCompleted = Completer<void>();
     await _auth.verifyPhoneNumber(
       phoneNumber: normalizedPhoneNumber,
       verificationCompleted: (credential) async {
-        await _auth.signInWithCredential(credential);
+        try {
+          await _auth.signInWithCredential(credential);
+        } finally {
+          if (!requestCompleted.isCompleted) {
+            requestCompleted.complete();
+          }
+        }
       },
       verificationFailed: (exception) {
         onError(exception.message ?? exception.code);
+        if (!requestCompleted.isCompleted) {
+          requestCompleted.complete();
+        }
       },
       codeSent: (verificationId, _) {
         onCodeSent(verificationId);
+        if (!requestCompleted.isCompleted) {
+          requestCompleted.complete();
+        }
       },
       codeAutoRetrievalTimeout: (_) {},
     );
+    await requestCompleted.future;
   }
 
   @override

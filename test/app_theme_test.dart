@@ -27,5 +27,16 @@ void main() {
       english.textTheme.bodyMedium?.fontWeight,
       bangla.textTheme.bodyMedium?.fontWeight,
     );
+    expect(
+      english.inputDecorationTheme.labelStyle?.fontWeight,
+      FontWeight.w700,
+    );
+    expect(
+      english.inputDecorationTheme.floatingLabelStyle?.fontWeight,
+      FontWeight.w800,
+    );
+    expect(english.listTileTheme.titleTextStyle?.fontWeight, FontWeight.w700);
+    expect(english.dialogTheme.titleTextStyle?.fontWeight, FontWeight.w800);
+    expect(english.snackBarTheme.contentTextStyle?.fontWeight, FontWeight.w700);
   });
 }

@@ -3,29 +3,30 @@ import 'package:medimind/core/localization/app_language_preference_store.dart';
 import 'package:medimind/core/localization/app_localization.dart';
 
 class _MemoryLanguageStore implements AppLanguagePreferenceStore {
-  final values = <String, String>{};
+  String? value;
 
   @override
-  Future<String?> read(String uid) async => values[uid];
+  Future<String?> read() async => value;
 
   @override
-  Future<void> write(String uid, String languageCode) async {
-    values[uid] = languageCode;
-  }
+  Future<void> write(String languageCode) async => value = languageCode;
 }
 
 void main() {
-  test('language choice is restored independently for each user', () async {
+  test('language choice is restored for the device across sessions', () async {
     final store = _MemoryLanguageStore();
-    final controller = AppLanguageController(preferenceStore: store);
+    final firstSession = AppLanguageController(preferenceStore: store);
 
-    await controller.bindUser('user-a');
-    controller.setLanguage('en');
+    await firstSession.restore();
+    firstSession.setLanguage('en');
     await Future<void>.delayed(Duration.zero);
-    await controller.bindUser(null);
-    expect(controller.languageCode, 'bn');
 
-    await controller.bindUser('user-a');
-    expect(controller.languageCode, 'en');
+    final signedOutSession = AppLanguageController(preferenceStore: store);
+    await signedOutSession.restore();
+    expect(signedOutSession.languageCode, 'en');
+
+    final nextLoginSession = AppLanguageController(preferenceStore: store);
+    await nextLoginSession.restore();
+    expect(nextLoginSession.languageCode, 'en');
   });
 }

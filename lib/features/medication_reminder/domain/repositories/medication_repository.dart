@@ -10,7 +10,7 @@ abstract class MedicationRepository {
   String? takePendingOpenedReminderPayload() => null;
 
   Future<List<Medication>> getAll({required String uid});
-  Future<Medication?> getById(String id);
+  Future<Medication?> getById({required String uid, required String id});
   Future<void> add({required String uid, required Medication medication});
   Future<void> update({required String uid, required Medication medication});
   Future<void> delete({required String uid, required String id});
