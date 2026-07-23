@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,14 +16,18 @@ import 'package:medimind/features/medication_reminder/domain/repositories/medica
 import 'package:medimind/features/medication_reminder/domain/services/medication_report_builder.dart';
 
 class FakeMedicationRepository implements MedicationRepository {
+  final StreamController<bool> _backupProgressController =
+      StreamController<bool>.broadcast(sync: true);
+  bool _backupInProgress = false;
+
   @override
   Stream<String> get automaticBackupSucceeded => const Stream<String>.empty();
 
   @override
-  Stream<bool> get backupInProgressChanged => const Stream<bool>.empty();
+  Stream<bool> get backupInProgressChanged => _backupProgressController.stream;
 
   @override
-  bool get isBackupInProgress => false;
+  bool get isBackupInProgress => _backupInProgress;
 
   @override
   Stream<String> get openedReminderPayloads => const Stream<String>.empty();
@@ -34,6 +40,12 @@ class FakeMedicationRepository implements MedicationRepository {
   final List<Medication> medications;
   Medication? lastAdded;
   Medication? lastUpdated;
+  String? lastDeletedId;
+
+  void emitBackupProgress(bool value) {
+    _backupInProgress = value;
+    _backupProgressController.add(value);
+  }
 
   @override
   Future<void> add({
@@ -44,13 +56,18 @@ class FakeMedicationRepository implements MedicationRepository {
   }
 
   @override
-  Future<void> delete({required String uid, required String id}) async {}
+  Future<void> delete({required String uid, required String id}) async {
+    lastDeletedId = id;
+  }
 
   @override
   Future<List<Medication>> getAll({required String uid}) async => medications;
 
   @override
-  Future<Medication?> getById(String id) async => null;
+  Future<Medication?> getById({
+    required String uid,
+    required String id,
+  }) async => null;
 
   @override
   Future<MedicationReport> getReport({
@@ -87,10 +104,10 @@ class FakeLanguagePreferenceStore implements AppLanguagePreferenceStore {
   String? languageCode;
 
   @override
-  Future<String?> read(String uid) async => languageCode;
+  Future<String?> read() async => languageCode;
 
   @override
-  Future<void> write(String uid, String languageCode) async {
+  Future<void> write(String languageCode) async {
     this.languageCode = languageCode;
   }
 }
@@ -113,9 +130,10 @@ class FakeSessionActivityStore implements SessionActivityStore {
 }
 
 class FakeAuthRepository implements AuthRepository {
-  FakeAuthRepository(this.user);
+  FakeAuthRepository(this.user, {this.phoneCodeRequest});
 
   final AppUser? user;
+  final Completer<void>? phoneCodeRequest;
 
   @override
   Stream<AppUser?> get authStateChanges => Stream<AppUser?>.value(user);
@@ -141,7 +159,10 @@ class FakeAuthRepository implements AuthRepository {
     required String phoneNumber,
     required void Function(String verificationId) onCodeSent,
     required void Function(String errorMessage) onError,
-  }) async {}
+  }) async {
+    await phoneCodeRequest?.future;
+    onCodeSent('verification-id');
+  }
 
   @override
   Future<AppUser> signInWithGoogle() async => user!;
@@ -204,6 +225,42 @@ void main() {
     expect(phoneInput.decoration.helperText, isNull);
   });
 
+  testWidgets('phone code request shows Please wait with a spinner', (
+    WidgetTester tester,
+  ) async {
+    final request = Completer<void>();
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: FakeMedicationRepository(),
+        authRepository: FakeAuthRepository(null, phoneCodeRequest: request),
+        sessionActivityStore: FakeSessionActivityStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Eng'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.phone_android));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextFormField), '01712345678');
+    await tester.tap(find.text('Send code'));
+    await tester.pump();
+
+    final sendButton = find.widgetWithText(FilledButton, 'Please wait...');
+    expect(sendButton, findsOneWidget);
+    expect(
+      find.descendant(
+        of: sendButton,
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+
+    request.complete();
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(FilledButton, 'Send code'), findsOneWidget);
+  });
+
   testWidgets('renders the Bangla dashboard for signed-in users', (
     WidgetTester tester,
   ) async {
@@ -248,7 +305,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byType(MediMindLogo), findsOneWidget);
+    expect(find.text('MediMind'), findsOneWidget);
+    expect(find.byType(MediMindLogo), findsNothing);
+    final wordmark = tester.widget<Text>(find.text('MediMind'));
+    expect(wordmark.style?.fontFamily, 'Manrope');
+    expect(wordmark.style?.fontWeight, FontWeight.w800);
     expect(find.byKey(const ValueKey('hero-now-time')), findsOneWidget);
     final currentTime = tester.widget<Text>(
       find.byKey(const ValueKey('hero-now-time')),
@@ -316,6 +377,120 @@ void main() {
       find.descendant(of: artwork, matching: find.byType(Image)),
       findsOneWidget,
     );
+  });
+
+  testWidgets('automatic backup progress is visible on the Backup button', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(420, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = FakeMedicationRepository(
+      medications: [
+        Medication(
+          id: 'backup-test',
+          medicineName: 'Napa',
+          dose: '1 pill',
+          durationDays: 0,
+          timeOfDay: '09:00',
+          mealOffset: 0,
+          isActive: true,
+          updatedAt: DateTime.now(),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: repository,
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'backup-user', displayName: 'Backup User'),
+        ),
+        sessionActivityStore: FakeSessionActivityStore(),
+        languagePreferenceStore: FakeLanguagePreferenceStore('en'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    repository.emitBackupProgress(true);
+    await tester.pump();
+    final backupButton = find.widgetWithText(OutlinedButton, 'Backing up...');
+    expect(backupButton, findsOneWidget);
+    expect(
+      find.descendant(
+        of: backupButton,
+        matching: find.byType(CircularProgressIndicator),
+      ),
+      findsOneWidget,
+    );
+
+    repository.emitBackupProgress(false);
+    await tester.pump();
+    expect(find.widgetWithText(OutlinedButton, 'Backup'), findsOneWidget);
+  });
+
+  testWidgets('deleting a reminder requires explicit confirmation', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(420, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repository = FakeMedicationRepository(
+      medications: [
+        Medication(
+          id: 'delete-test',
+          medicineName: 'Delete Test Medicine',
+          dose: '1 pill',
+          durationDays: 0,
+          timeOfDay: '09:00',
+          mealOffset: 0,
+          isActive: true,
+          updatedAt: DateTime.now(),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: repository,
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'delete-user', displayName: 'Delete User'),
+        ),
+        sessionActivityStore: FakeSessionActivityStore(),
+        languagePreferenceStore: FakeLanguagePreferenceStore('en'),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final medicineCard = find.byKey(
+      const ValueKey('medicine-card-delete-test'),
+    );
+    await tester.scrollUntilVisible(
+      medicineCard,
+      300,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(medicineCard);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Are you sure?'), findsOneWidget);
+    expect(find.text('No'), findsOneWidget);
+    expect(find.text('Yes'), findsOneWidget);
+
+    await tester.tap(find.text('No'));
+    await tester.pumpAndSettle();
+    expect(repository.lastDeletedId, isNull);
+
+    await tester.tap(medicineCard);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Delete'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Yes'));
+    await tester.pumpAndSettle();
+
+    expect(repository.lastDeletedId, 'delete-test');
   });
 
   testWidgets('medicine form is responsive and uses time plus dosage', (

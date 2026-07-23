@@ -40,6 +40,7 @@ class InlineButtonProgress extends StatelessWidget {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.w800),
           ),
         ),
       ],

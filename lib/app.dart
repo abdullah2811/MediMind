@@ -60,6 +60,7 @@ class _MediMindAppState extends State<MediMindApp> {
           widget.languagePreferenceStore ??
           (widget.repository == null ? HiveAppLanguagePreferenceStore() : null),
     );
+    unawaited(_languageController.restore());
     final notificationService = MedicationNotificationService();
     _medicationRepository =
         widget.repository ?? _buildDefaultRepository(notificationService);

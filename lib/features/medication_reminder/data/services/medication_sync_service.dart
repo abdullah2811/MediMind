@@ -37,6 +37,8 @@ class MedicationSyncService {
   bool _cloudBackupPaused = false;
   bool _pauseWasLogged = false;
   bool _backupPending = false;
+  bool _backupPreparationInProgress = false;
+  bool _pendingBackupReady = false;
   int _pendingRevision = 0;
   Timer? _retryTimer;
   final StreamController<String> _automaticBackupSucceeded =
@@ -50,6 +52,27 @@ class MedicationSyncService {
   Stream<bool> get backupInProgressChanged => _backupInProgressChanged.stream;
   bool get isBackupInProgress => _isBackupInProgress;
 
+  Future<MedicationCloudHydrationResult> hydrateLocalFromCloud({
+    required String uid,
+  }) async {
+    final localMedications = await _localDataSource.getAll(uid: uid);
+    final pendingDeletionIds = await _localDataSource.getPendingDeletionIds(
+      uid: uid,
+    );
+    final cloudMedications = await _remoteDataSource
+        .getAll(uid: uid)
+        .timeout(const Duration(seconds: 20));
+    final result = planMedicationCloudHydration(
+      localMedications: localMedications,
+      cloudMedications: cloudMedications,
+      pendingDeletionIds: pendingDeletionIds.toSet(),
+    );
+    for (final medication in result.medicationsToSaveLocally) {
+      await _localDataSource.save(uid: uid, medication: medication);
+    }
+    return result;
+  }
+
   void startSession(String uid) {
     if (_sessionUid == uid) {
       return;
@@ -57,8 +80,11 @@ class MedicationSyncService {
     _retryTimer?.cancel();
     _retryTimer = null;
     _backupPending = false;
+    _backupPreparationInProgress = false;
+    _pendingBackupReady = false;
     _pendingRevision++;
     _sessionUid = uid;
+    _updateBackupInProgress();
     resumeCloudBackups();
   }
 
@@ -81,27 +107,52 @@ class MedicationSyncService {
     _retryTimer = null;
   }
 
-  void queueBackup({required String uid}) {
+  void markBackupPending({required String uid}) {
     startSession(uid);
     _backupPending = true;
+    _backupPreparationInProgress = true;
+    _pendingBackupReady = false;
     _pendingRevision++;
+    _updateBackupInProgress();
+  }
+
+  void queueBackup({required String uid}) {
+    markBackupPending(uid: uid);
+    runPreparedBackup(uid: uid);
+  }
+
+  void runPreparedBackup({required String uid}) {
+    startSession(uid);
+    if (!_backupPending) {
+      return;
+    }
+    _pendingBackupReady = true;
     _runPendingBackup(uid);
   }
 
   void retryPendingBackup({required String uid}) {
     startSession(uid);
-    if (_backupPending) {
+    if (_backupPending && _pendingBackupReady) {
       _runPendingBackup(uid);
     }
   }
 
   void _runPendingBackup(String uid) {
+    if (!_pendingBackupReady) {
+      return;
+    }
     if (_cloudBackupPaused || (_retryAfter?.isAfter(DateTime.now()) ?? false)) {
+      _backupPreparationInProgress = false;
+      _updateBackupInProgress();
       return;
     }
     final alreadyRunning = _backupInFlight != null;
     final revision = _pendingRevision;
     final operation = backup(uid: uid);
+    if (!alreadyRunning) {
+      _backupPreparationInProgress = false;
+      _updateBackupInProgress();
+    }
     if (alreadyRunning) {
       return;
     }
@@ -117,6 +168,9 @@ class MedicationSyncService {
             }
             if (revision == _pendingRevision) {
               _backupPending = false;
+              _backupPreparationInProgress = false;
+              _pendingBackupReady = false;
+              _updateBackupInProgress();
               _automaticBackupSucceeded.add(uid);
             } else {
               _backupPending = true;
@@ -143,16 +197,18 @@ class MedicationSyncService {
   }
 
   Future<void> backupLocalToCloud({required String uid}) async {
-    final pendingDeletionIds = await _localDataSource.getPendingDeletionIds();
+    final pendingDeletionIds = await _localDataSource.getPendingDeletionIds(
+      uid: uid,
+    );
     for (final id in pendingDeletionIds) {
       await _remoteDataSource
           .deleteMedication(uid: uid, id: id)
           .timeout(const Duration(seconds: 20));
       await _deleteMedicationPhotoIfPresent(userId: uid, medicationId: id);
-      await _localDataSource.clearPendingDeletion(id);
+      await _localDataSource.clearPendingDeletion(uid: uid, id: id);
     }
 
-    final localMedications = await _localDataSource.getAll();
+    final localMedications = await _localDataSource.getAll(uid: uid);
     for (final medication in localMedications) {
       final cloudImageUrl = await _uploadMedicationImageIfNeeded(
         userId: uid,
@@ -165,7 +221,7 @@ class MedicationSyncService {
           .upsertMedication(uid: uid, medication: backedUpMedication)
           .timeout(const Duration(seconds: 20));
       if (cloudImageUrl != medication.backupImageUrl) {
-        await _localDataSource.save(backedUpMedication);
+        await _localDataSource.save(uid: uid, medication: backedUpMedication);
       }
     }
 
@@ -237,7 +293,7 @@ class MedicationSyncService {
         .whenComplete(() {
           if (identical(_backupInFlight, operation)) {
             _backupInFlight = null;
-            _setBackupInProgress(false);
+            _updateBackupInProgress();
           }
         });
     _backupInFlight = operation;
@@ -252,11 +308,20 @@ class MedicationSyncService {
     _backupInProgressChanged.add(value);
   }
 
+  void _updateBackupInProgress() {
+    _setBackupInProgress(
+      _backupInFlight != null || _backupPreparationInProgress,
+    );
+  }
+
   Future<void> backupNow({required String uid}) async {
     final revision = _pendingRevision;
     await backup(uid: uid);
     if (revision == _pendingRevision) {
       _backupPending = false;
+      _backupPreparationInProgress = false;
+      _pendingBackupReady = false;
+      _updateBackupInProgress();
     }
   }
 
@@ -310,4 +375,51 @@ class MedicationSyncService {
     return message.contains('FIRESTORE') &&
         message.contains('INTERNAL ASSERTION FAILED');
   }
+}
+
+class MedicationCloudHydrationResult {
+  const MedicationCloudHydrationResult({
+    required this.medicationsToSaveLocally,
+    required this.cloudBackupRequired,
+  });
+
+  final List<Medication> medicationsToSaveLocally;
+  final bool cloudBackupRequired;
+}
+
+MedicationCloudHydrationResult planMedicationCloudHydration({
+  required List<Medication> localMedications,
+  required List<Medication> cloudMedications,
+  required Set<String> pendingDeletionIds,
+}) {
+  final localById = <String, Medication>{
+    for (final medication in localMedications) medication.id: medication,
+  };
+  final cloudIds = <String>{};
+  final medicationsToSaveLocally = <Medication>[];
+  var cloudBackupRequired = pendingDeletionIds.isNotEmpty;
+
+  for (final cloudMedication in cloudMedications) {
+    cloudIds.add(cloudMedication.id);
+    if (pendingDeletionIds.contains(cloudMedication.id)) {
+      continue;
+    }
+    final localMedication = localById[cloudMedication.id];
+    if (localMedication == null) {
+      medicationsToSaveLocally.add(cloudMedication);
+    } else if (cloudMedication.updatedAt.isAfter(localMedication.updatedAt)) {
+      medicationsToSaveLocally.add(cloudMedication);
+    } else if (localMedication.updatedAt.isAfter(cloudMedication.updatedAt)) {
+      cloudBackupRequired = true;
+    }
+  }
+
+  if (localMedications.any((medication) => !cloudIds.contains(medication.id))) {
+    cloudBackupRequired = true;
+  }
+
+  return MedicationCloudHydrationResult(
+    medicationsToSaveLocally: medicationsToSaveLocally,
+    cloudBackupRequired: cloudBackupRequired,
+  );
 }

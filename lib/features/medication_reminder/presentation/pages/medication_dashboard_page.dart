@@ -61,7 +61,8 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _load();
+    _checkedRecentReminderOnLoad = false;
+    _medicationsFuture = _initializeAndLoad();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         final now = DateTime.now();
@@ -90,7 +91,6 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
         .listen(_handleOpenedReminderPayload);
     _pendingOpenedReminderPayload = widget.repository
         .takePendingOpenedReminderPayload();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startAutoSync());
   }
 
   @override
@@ -118,6 +118,11 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
     if (mounted) {
       setState(_load);
     }
+  }
+
+  Future<List<Medication>> _initializeAndLoad() async {
+    await widget.repository.startAutoSync(uid: widget.uid);
+    return widget.repository.getAll(uid: widget.uid);
   }
 
   void _load() {
@@ -725,24 +730,14 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                     backgroundColor: AppPalette.ivory,
                     elevation: 0,
                     titleSpacing: 12,
-                    title: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const MediMindLogo(size: 34),
-                        if (MediaQuery.sizeOf(context).width >= 460) ...[
-                          const SizedBox(width: 9),
-                          const Flexible(
-                            child: Text(
-                              'MediMind',
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 26,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
+                    title: const Text(
+                      'MediMind',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: 'Manrope',
+                        fontSize: 26,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                     actions: [
                       IconButton(
@@ -882,9 +877,9 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
     );
   }
 
-  void _showMedicationSheet(Medication medication) {
+  Future<void> _showMedicationSheet(Medication medication) async {
     final parentContext = context;
-    showModalBottomSheet<void>(
+    final action = await showModalBottomSheet<String>(
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
@@ -957,16 +952,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: () async {
-                        Navigator.pop(parentContext);
-                        await widget.repository.delete(
-                          uid: widget.uid,
-                          id: medication.id,
-                        );
-                        if (mounted) {
-                          setState(_load);
-                        }
-                      },
+                      onPressed: () => Navigator.pop(context, 'delete'),
                       child: Text(context.tr('delete')),
                     ),
                   ),
@@ -999,6 +985,33 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
         );
       },
     );
+    if (action != 'delete' || !mounted) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(dialogContext.tr('delete_confirmation_title')),
+        content: Text(dialogContext.tr('delete_confirmation_message')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(dialogContext.tr('no')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(dialogContext.tr('yes')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await widget.repository.delete(uid: widget.uid, id: medication.id);
+    if (mounted) {
+      setState(_load);
+    }
   }
 }
 
@@ -1824,6 +1837,7 @@ class _MedicineCard extends StatelessWidget {
     final showMedicineActions = !medicineRecorded && medicineActionAvailable;
     final nextLabel = formatEnglish12HourDateTime(nextTime);
     return Card(
+      key: ValueKey('medicine-card-${medication.id}'),
       elevation: 0,
       color: Colors.white,
       shape: RoundedRectangleBorder(

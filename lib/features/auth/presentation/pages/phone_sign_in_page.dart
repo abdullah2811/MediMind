@@ -186,7 +186,11 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 14),
               child: InlineButtonProgress(
-                label: context.tr('send_code'),
+                label: context.tr(
+                  _operation == _PhoneOperation.sendingCode
+                      ? 'please_wait'
+                      : 'send_code',
+                ),
                 inProgress: _operation == _PhoneOperation.sendingCode,
               ),
             ),

@@ -11,7 +11,7 @@ class AppLanguageController extends ValueNotifier<Locale> {
       super(const Locale('bn'));
 
   final AppLanguagePreferenceStore? _preferenceStore;
-  String? _activeUid;
+  int _restoreRevision = 0;
 
   void toggle() {
     setLanguage(value.languageCode == 'en' ? 'bn' : 'en');
@@ -19,27 +19,20 @@ class AppLanguageController extends ValueNotifier<Locale> {
 
   void setLanguage(String languageCode) {
     value = Locale(languageCode == 'en' ? 'en' : 'bn');
-    final uid = _activeUid;
-    if (uid != null) {
-      unawaited(_preferenceStore?.write(uid, value.languageCode));
-    }
+    _restoreRevision++;
+    unawaited(_preferenceStore?.write(value.languageCode));
   }
 
-  Future<void> bindUser(String? uid) async {
-    _activeUid = uid;
-    if (uid == null) {
-      value = const Locale('bn');
-      return;
-    }
-
-    final stored = await _preferenceStore?.read(uid);
-    if (_activeUid != uid) {
+  Future<void> restore() async {
+    final revision = ++_restoreRevision;
+    final stored = await _preferenceStore?.read();
+    if (revision != _restoreRevision) {
       return;
     }
     if (stored == 'en' || stored == 'bn') {
       value = Locale(stored!);
     } else {
-      await _preferenceStore?.write(uid, value.languageCode);
+      await _preferenceStore?.write(value.languageCode);
     }
   }
 
@@ -169,6 +162,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'verification_code': 'Verification code',
     'enter_six_digit_code': 'Enter the 6-digit verification code.',
     'send_code': 'Send code',
+    'please_wait': 'Please wait...',
     'verify_and_sign_in': 'Verify and sign in',
     'request_code_first': 'Request the verification code first.',
     'verification_sent': 'Verification code sent.',
@@ -217,6 +211,11 @@ const Map<String, Map<String, String>> _localizedValues = {
         'Add a medicine once; reminders and backup will be handled automatically.',
     'edit': 'Edit',
     'delete': 'Delete',
+    'delete_confirmation_title': 'Are you sure?',
+    'delete_confirmation_message':
+        'This medicine reminder will be permanently deleted.',
+    'yes': 'Yes',
+    'no': 'No',
     'dose': 'Dosage',
     'time': 'Time',
     'formula': 'Generic / formula',
@@ -358,6 +357,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'verification_code': 'যাচাই কোড',
     'enter_six_digit_code': '৬ সংখ্যার যাচাই কোডটি লিখুন।',
     'send_code': 'কোড পাঠান',
+    'please_wait': 'অনুগ্রহ করে অপেক্ষা করুন...',
     'verify_and_sign_in': 'যাচাই করে প্রবেশ করুন',
     'request_code_first': 'আগে যাচাই কোড পাঠাতে বলুন।',
     'verification_sent': 'যাচাই কোড পাঠানো হয়েছে।',
@@ -406,6 +406,11 @@ const Map<String, Map<String, String>> _localizedValues = {
         'একবার ওষুধ যোগ করুন—সময়মতো মনে করানো ও ব্যাকআপের কাজ অ্যাপই করবে।',
     'edit': 'পরিবর্তন করুন',
     'delete': 'মুছে ফেলুন',
+    'delete_confirmation_title': 'আপনি কি নিশ্চিত?',
+    'delete_confirmation_message':
+        'এই ওষুধের রিমাইন্ডারটি স্থায়ীভাবে মুছে ফেলা হবে।',
+    'yes': 'হ্যাঁ',
+    'no': 'না',
     'dose': 'খাওয়ার পরিমাণ',
     'time': 'সময়',
     'formula': 'জেনেরিক / ফর্মুলা',

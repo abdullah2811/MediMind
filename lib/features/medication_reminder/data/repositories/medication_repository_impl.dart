@@ -62,13 +62,13 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required String uid,
     required Medication medication,
   }) async {
-    await _localDataSource.save(medication);
+    await _localDataSource.save(uid: uid, medication: medication);
     _queuePostMutationWork(uid);
   }
 
   @override
   Future<void> delete({required String uid, required String id}) async {
-    await _localDataSource.delete(id);
+    await _localDataSource.delete(uid: uid, id: id);
     _queuePostMutationWork(uid);
   }
 
@@ -77,12 +77,12 @@ class MedicationRepositoryImpl implements MedicationRepository {
     if (await _applyPendingNotificationActions(uid)) {
       _syncService.queueBackup(uid: uid);
     }
-    return _localDataSource.getAll();
+    return _localDataSource.getAll(uid: uid);
   }
 
   @override
-  Future<Medication?> getById(String id) {
-    return _localDataSource.getById(id);
+  Future<Medication?> getById({required String uid, required String id}) {
+    return _localDataSource.getById(uid: uid, id: id);
   }
 
   @override
@@ -98,7 +98,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required int rangeDays,
   }) async {
     await _applyPendingNotificationActions(uid);
-    final medications = await _localDataSource.getAll();
+    final medications = await _localDataSource.getAll(uid: uid);
     final previous = await _reportLocalDataSource.get(
       uid: uid,
       rangeDays: rangeDays,
@@ -117,7 +117,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required String uid,
     required Medication medication,
   }) async {
-    await _localDataSource.save(medication);
+    await _localDataSource.save(uid: uid, medication: medication);
     _queuePostMutationWork(uid);
   }
 
@@ -127,11 +127,21 @@ class MedicationRepositoryImpl implements MedicationRepository {
     final notificationActionChangedState =
         await _applyPendingNotificationActions(uid);
     _syncService.startSession(uid);
-    if (notificationActionChangedState) {
-      _syncService.queueBackup(uid: uid);
+    var cloudBackupRequired = notificationActionChangedState;
+    try {
+      final hydration = await _syncService.hydrateLocalFromCloud(uid: uid);
+      cloudBackupRequired =
+          cloudBackupRequired || hydration.cloudBackupRequired;
+    } catch (error, stackTrace) {
+      cloudBackupRequired = true;
+      debugPrint('Medication cloud restore deferred: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
     await _refreshReports(uid: uid);
     await _rescheduleLocalNotifications(uid: uid);
+    if (cloudBackupRequired) {
+      _syncService.queueBackup(uid: uid);
+    }
     _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
       results,
     ) {
@@ -165,6 +175,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
   }
 
   void _queuePostMutationWork(String uid) {
+    _syncService.markBackupPending(uid: uid);
     _postMutationUid = uid;
     _postMutationRevision++;
     if (_postMutationWork != null) {
@@ -205,12 +216,12 @@ class MedicationRepositoryImpl implements MedicationRepository {
     }
     final uid = _postMutationUid;
     if (uid != null) {
-      _syncService.queueBackup(uid: uid);
+      _syncService.runPreparedBackup(uid: uid);
     }
   }
 
   Future<void> _rescheduleLocalNotifications({required String uid}) async {
-    final medications = await _localDataSource.getAll();
+    final medications = await _localDataSource.getAll(uid: uid);
     try {
       await _notificationService.rescheduleAll(medications, uid: uid);
     } catch (error, stackTrace) {
@@ -222,7 +233,7 @@ class MedicationRepositoryImpl implements MedicationRepository {
   }
 
   Future<void> _refreshReports({required String uid}) async {
-    final medications = await _localDataSource.getAll();
+    final medications = await _localDataSource.getAll(uid: uid);
     for (final rangeDays in medicationReportRanges) {
       final previous = await _reportLocalDataSource.get(
         uid: uid,

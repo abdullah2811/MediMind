@@ -7,16 +7,34 @@ class MedicationLocalDataSource {
 
   final String boxName;
 
-  Box<dynamic>? _box;
+  final Map<String, Future<Box<dynamic>>> _userBoxes =
+      <String, Future<Box<dynamic>>>{};
   static const _deletedKeyPrefix = '__pending_delete__:';
+  static const _legacyMigrationOwnerKey = 'legacy_migration_owner';
 
-  Future<Box<dynamic>> _openBox() async {
-    _box ??= await Hive.openBox<dynamic>(boxName);
-    return _box!;
+  Future<Box<dynamic>> _openBox(String uid) {
+    if (uid.isEmpty) {
+      throw ArgumentError.value(uid, 'uid', 'User ID must not be empty.');
+    }
+    return _userBoxes.putIfAbsent(uid, () => _openUserBox(uid));
   }
 
-  Future<List<Medication>> getAll() async {
-    final box = await _openBox();
+  Future<Box<dynamic>> _openUserBox(String uid) async {
+    final safeUid = uid.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
+    final box = await Hive.openBox<dynamic>('${boxName}_$safeUid');
+    final metadata = await Hive.openBox<dynamic>('${boxName}_metadata');
+    if (metadata.get(_legacyMigrationOwnerKey) == null) {
+      final legacy = await Hive.openBox<dynamic>(boxName);
+      if (box.isEmpty && legacy.isNotEmpty) {
+        await box.putAll(legacy.toMap());
+      }
+      await metadata.put(_legacyMigrationOwnerKey, uid);
+    }
+    return box;
+  }
+
+  Future<List<Medication>> getAll({required String uid}) async {
+    final box = await _openBox(uid);
     return box
         .toMap()
         .entries
@@ -29,8 +47,8 @@ class MedicationLocalDataSource {
         .toList(growable: false);
   }
 
-  Future<Medication?> getById(String id) async {
-    final box = await _openBox();
+  Future<Medication?> getById({required String uid, required String id}) async {
+    final box = await _openBox(uid);
     final value = box.get(id);
     if (value == null) {
       return null;
@@ -38,20 +56,23 @@ class MedicationLocalDataSource {
     return Medication.fromJson(Map<String, dynamic>.from(value as Map));
   }
 
-  Future<void> save(Medication medication) async {
-    final box = await _openBox();
+  Future<void> save({
+    required String uid,
+    required Medication medication,
+  }) async {
+    final box = await _openBox(uid);
     await box.put(medication.id, medication.toJson());
     await box.delete('$_deletedKeyPrefix${medication.id}');
   }
 
-  Future<void> delete(String id) async {
-    final box = await _openBox();
+  Future<void> delete({required String uid, required String id}) async {
+    final box = await _openBox(uid);
     await box.delete(id);
     await box.put('$_deletedKeyPrefix$id', true);
   }
 
-  Future<List<String>> getPendingDeletionIds() async {
-    final box = await _openBox();
+  Future<List<String>> getPendingDeletionIds({required String uid}) async {
+    final box = await _openBox(uid);
     return box.keys
         .map((key) => key.toString())
         .where((key) => key.startsWith(_deletedKeyPrefix))
@@ -59,14 +80,20 @@ class MedicationLocalDataSource {
         .toList(growable: false);
   }
 
-  Future<void> clearPendingDeletion(String id) async {
-    final box = await _openBox();
+  Future<void> clearPendingDeletion({
+    required String uid,
+    required String id,
+  }) async {
+    final box = await _openBox(uid);
     await box.delete('$_deletedKeyPrefix$id');
   }
 
-  Future<void> replaceAll(List<Medication> medications) async {
-    final box = await _openBox();
-    final pendingDeletionIds = await getPendingDeletionIds();
+  Future<void> replaceAll({
+    required String uid,
+    required List<Medication> medications,
+  }) async {
+    final box = await _openBox(uid);
+    final pendingDeletionIds = await getPendingDeletionIds(uid: uid);
     await box.clear();
     for (final medication in medications) {
       await box.put(medication.id, medication.toJson());

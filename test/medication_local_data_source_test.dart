@@ -33,15 +33,34 @@ void main() {
       updatedAt: DateTime.utc(2026, 7, 22),
     );
 
-    await source.save(medication);
-    await source.delete(medication.id);
+    await source.save(uid: 'owner-1', medication: medication);
+    await source.delete(uid: 'owner-1', id: medication.id);
 
-    expect(await source.getAll(), isEmpty);
-    expect(await source.getPendingDeletionIds(), ['medicine-1']);
+    expect(await source.getAll(uid: 'owner-1'), isEmpty);
+    expect(await source.getPendingDeletionIds(uid: 'owner-1'), ['medicine-1']);
 
-    await source.save(medication);
-    expect(await source.getPendingDeletionIds(), isEmpty);
-    expect((await source.getAll()).single.id, 'medicine-1');
+    await source.save(uid: 'owner-1', medication: medication);
+    expect(await source.getPendingDeletionIds(uid: 'owner-1'), isEmpty);
+    expect((await source.getAll(uid: 'owner-1')).single.id, 'medicine-1');
+  });
+
+  test('local medicines are isolated by account on one device', () async {
+    final source = MedicationLocalDataSource(boxName: 'account-isolation');
+    final medication = Medication(
+      id: 'medicine-1',
+      medicineName: 'Example',
+      dose: '1 pill',
+      durationDays: 0,
+      timeOfDay: '09:00',
+      mealOffset: 0,
+      isActive: true,
+      updatedAt: DateTime.utc(2026, 7, 22),
+    );
+
+    await source.save(uid: 'owner-1', medication: medication);
+
+    expect(await source.getAll(uid: 'owner-1'), hasLength(1));
+    expect(await source.getAll(uid: 'owner-2'), isEmpty);
   });
 
   test('reports are persisted locally per account and range', () async {

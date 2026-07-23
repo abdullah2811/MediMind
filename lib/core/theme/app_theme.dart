@@ -103,6 +103,11 @@ ThemeData buildAppTheme(Locale locale) {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: AppPalette.paper,
+      labelStyle: textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+      floatingLabelStyle: textTheme.bodyLarge?.copyWith(
+        color: AppPalette.aubergine,
+        fontWeight: FontWeight.w800,
+      ),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(16),
         borderSide: BorderSide(color: scheme.outline),
@@ -138,9 +143,29 @@ ThemeData buildAppTheme(Locale locale) {
         textStyle: const TextStyle(fontWeight: FontWeight.w800),
       ),
     ),
+    listTileTheme: ListTileThemeData(
+      titleTextStyle: textTheme.bodyLarge?.copyWith(
+        fontWeight: FontWeight.w700,
+      ),
+      subtitleTextStyle: textTheme.bodyMedium?.copyWith(
+        color: AppPalette.muted,
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+    dialogTheme: DialogThemeData(
+      titleTextStyle: textTheme.titleLarge?.copyWith(
+        fontWeight: FontWeight.w800,
+      ),
+      contentTextStyle: textTheme.bodyMedium?.copyWith(
+        fontWeight: FontWeight.w700,
+      ),
+    ),
     snackBarTheme: const SnackBarThemeData(
       backgroundColor: AppPalette.ink,
-      contentTextStyle: TextStyle(color: Colors.white),
+      contentTextStyle: TextStyle(
+        color: Colors.white,
+        fontWeight: FontWeight.w700,
+      ),
       behavior: SnackBarBehavior.floating,
     ),
   );

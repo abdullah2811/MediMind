@@ -94,6 +94,7 @@ Future<bool> applyPendingMedicationNotificationActions({
       }
 
       await _applyActionPayload(
+        uid: uid,
         actionId: actionId,
         payload: payload,
         recordedAt: recordedAt,
@@ -115,7 +116,7 @@ Future<bool> applyPendingMedicationNotificationActions({
   if (!changed) {
     return false;
   }
-  final medications = await localDataSource.getAll();
+  final medications = await localDataSource.getAll(uid: uid);
   final reportTime = latestActionTime ?? DateTime.now();
   for (final rangeDays in medicationReportRanges) {
     final previous = await reportLocalDataSource.get(
@@ -136,6 +137,7 @@ Future<bool> applyPendingMedicationNotificationActions({
 }
 
 Future<void> _applyActionPayload({
+  required String uid,
   required String actionId,
   required Map<String, dynamic> payload,
   required DateTime recordedAt,
@@ -171,12 +173,13 @@ Future<void> _applyActionPayload({
   addTargets(payload['doses'], medicine: true);
   addTargets(payload['meals'], medicine: false);
   for (final entry in targets.entries) {
-    final medication = await localDataSource.getById(entry.key);
+    final medication = await localDataSource.getById(uid: uid, id: entry.key);
     if (medication == null) {
       continue;
     }
     await localDataSource.save(
-      applyNotificationActionToMedication(
+      uid: uid,
+      medication: applyNotificationActionToMedication(
         medication: medication,
         actionId: actionId,
         medicineOccurrences: entry.value.medicine,

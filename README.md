@@ -1,164 +1,395 @@
-# MediMind
+<p align="center">
+  <img src="assets/images/medimind_logo.png" width="112" alt="MediMind logo">
+</p>
 
-MediMind is a bilingual medication reminder application built with Flutter and
-Firebase. It is designed for users in Bangladesh, works with or without an
-active internet connection. The device database is the source of truth, while
-Firebase is used only as an online backup when connectivity is available.
+<h1 align="center">MediMind</h1>
 
-The application currently targets Android, iOS, and the web.
+<p align="center">
+  A bilingual, local-first medicine reminder and adherence tracker built for dependable everyday use.
+</p>
 
-## Main features
+<p align="center">
+  <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white">
+  <img alt="Dart" src="https://img.shields.io/badge/Dart-%5E3.9.0-0175C2?logo=dart&logoColor=white">
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20Web-552746">
+  <img alt="Release" src="https://img.shields.io/badge/release-v1.0.0-E76543">
+</p>
 
-- Phone-number sign-in and Google/Gmail sign-in only.
-- Flexible Bangladesh phone-number entry.
-- Automatic conversion of valid numbers to Firebase-compatible E.164 format.
-- Bengali and English interfaces, with Bengali selected by default.
-- Medicine type selection: tablet, capsule, syrup, drop, or insulin.
-- Medicine strength entry with units such as mg, g, and mcg.
-- Multiple daily medicine times, each with its own dosage.
-- Repeat schedules for daily, weekly, every 15 days, monthly, or a custom
-  interval from 1 to 365 days.
-- Dosage units derived automatically from the medicine type.
-- Optional meal reminders calculated from the medicine reminder time.
-- Custom before-meal and after-meal offsets, defaulting to 20 minutes.
-- Medicine and meal taken/not-taken tracking, including the actual time and
-  whether a late dose was taken with food.
-- Optional medicine photos shown prominently on dashboard cards and Android
-  notifications.
-- High-priority local notifications in the language used when the
-  medicine was saved, with Android actions for recording medicine and meal
-  taken/not-taken status without opening the app.
-- Collision-safe reminder planning that merges events scheduled for the same
-  minute and rejects contradictory nearby meal anchors.
-- A dashboard showing the next medicine/meal events in chronological order,
-  beginning at the top-right of the hero card, with weekday/date headings,
-  the live current time, and a dynamic day-cycle arc whose event dots change
-  after their times pass.
-- Detailed local-first 7-day and 30-day reports with scheduled times, actual
-  medicine/meal times, taken/not-taken status, and owner-only cloud snapshots.
-- Local-first storage using Hive.
-- Automatic Firebase backup after medicines are added or updated.
-- Automatic backup retry when network connectivity returns.
-- Persistent offline deletion records so cloud backups reflect local deletes.
-- Manual backup controls when medicines exist.
-- Persistent mobile sign-in with automatic sign-out after 30 days of
+MediMind helps people schedule medicines, receive timely reminders, record
+whether a dose was taken, and review adherence history. The application is
+designed around a local-first model: Hive is the source of truth, reminders
+continue to work without internet access, and Firebase provides private cloud
+backup when connectivity is available.
+
+The interface supports Bengali and English, while every displayed time uses a
+consistent English 12-hour `AM/PM` format.
+
+## Table of Contents
+
+- [Highlights](#highlights)
+- [Features](#features)
+- [Reminder Experience](#reminder-experience)
+- [Architecture](#architecture)
+- [Technology Stack](#technology-stack)
+- [Project Structure](#project-structure)
+- [Getting Started](#getting-started)
+- [Firebase Setup](#firebase-setup)
+- [Platform Configuration](#platform-configuration)
+- [Development](#development)
+- [Testing](#testing)
+- [Release Builds](#release-builds)
+- [Security and Privacy](#security-and-privacy)
+- [Known Platform Constraints](#known-platform-constraints)
+- [License](#license)
+
+## Highlights
+
+| Capability | What MediMind Provides |
+| --- | --- |
+| Reliable reminders | Exact local scheduling, sound, vibration, lock-screen visibility, and Android screen wake |
+| Quick action | Mark a medicine taken or not taken from Android notifications |
+| Grouped doses | Medicines due in the same minute are presented in one clear reminder |
+| Local-first data | Medicines, check-ins, reports, and pending deletions remain available offline |
+| Cloud backup | Change-driven Firebase backup with retries, progress feedback, and manual control |
+| Bilingual UI | Bengali-first interface with English switching and consistent typography |
+| Clear time display | English 12-hour `AM/PM` formatting in both language modes |
+| Adherence reports | Local 7-day and 30-day medicine history |
+| Responsive design | Phone-friendly layouts with wider-screen support |
+
+## Features
+
+### Medicine Management
+
+- Add, edit, inspect, and delete medicine reminders.
+- Confirm destructive medicine deletion through a localized Yes/No dialog.
+- Supported medicine types:
+  - Tablet
+  - Capsule
+  - Syrup
+  - Drop
+  - Insulin
+- Record medicine strength using `mg`, `g`, `mcg`, or `units/ml`.
+- Store optional formula or generic name, company name, notes, and a medicine
+  photo.
+- Add multiple dose times to one medicine.
+- Assign a separate dosage value to every dose time.
+- Derive dosage units from the medicine type:
+
+  | Medicine Type | Dosage Unit |
+  | --- | --- |
+  | Tablet | Pill |
+  | Capsule | Pill |
+  | Syrup | Millilitre |
+  | Drop | Drop |
+  | Insulin | Unit |
+
+- Detect likely duplicate reminders when at least two identity signals match:
+  medicine name, dosage signature, or formula.
+- Preserve legacy local records through backward-compatible deserialization.
+
+### Recurrence and Scheduling
+
+- Daily reminders.
+- Weekly reminders.
+- Every-15-days reminders.
+- Monthly reminders that preserve the starting day where possible and use the
+  last valid day in shorter months.
+- Custom intervals from 1 through 365 days.
+- The selected `scheduleFrequency` is the recurrence source of truth.
+- `customIntervalDays` is stored only for custom schedules and removed from
+  Firestore for all predefined schedules.
+- Reminder planning uses the `Asia/Dhaka` time zone.
+- Same-minute medicines are merged into one reminder event.
+- Up to 360 future Android events are scheduled at a time; iOS uses a smaller
+  platform-appropriate horizon.
+
+### Dose Tracking
+
+- Mark a scheduled medicine as taken or not taken.
+- Record the actual time when a medicine was taken.
+- Edit a medicine consumption record from the medicine detail sheet.
+- Show quick status actions five minutes before a dose is due.
+- Remove those actions after the occurrence has been recorded, preventing the
+  next reminder from appearing as the current action target.
+- Apply Android notification actions safely even when the Flutter UI is not
+  running.
+- Refresh reports and queue a backup after adherence state changes.
+
+### Dashboard
+
+- A live day-cycle arc that begins at the current time and ends at the next
+  meaningful medicine event.
+- Current and endpoint times displayed in English 12-hour `AM/PM` format.
+- Live due-in countdown inside the arc.
+- Upcoming same-time medicine groups presented as one event.
+- Centered Today and Active summary metrics.
+- Superscript English date suffixes such as `23rd` and `14th`.
+- Responsive Add medicine and Backup actions displayed side by side.
+- Branded, responsive application header using the MediMind logo.
+- Medicine cards with schedule, dosage, status, and optional local artwork.
+- Pull-to-refresh support.
+
+### Reports
+
+- Rolling 7-day and 30-day adherence views.
+- Medicine taken and not-taken totals.
+- Scheduled time and actual recorded time.
+- Detailed history grouped by calendar date.
+- Reports generated from local check-in data without requiring internet.
+- Historical report entries retained when a medicine is later deleted.
+- Owner-scoped report snapshots backed up to Firestore.
+
+### Authentication
+
+- Bangladesh phone-number authentication through Firebase.
+- Google/Gmail authentication.
+- Common Bangladesh phone formats are normalized to Firebase-compatible E.164
+  format.
+- Bengali digits, whitespace, parentheses, and hyphens are accepted in phone
+  input.
+- Inline loading feedback while sending an OTP, verifying a code, or signing
+  in.
+- Persistent mobile sessions with automatic sign-out after 30 days of
   inactivity.
-- Responsive layouts for narrow phone screens and wider web screens.
 
-## Technology stack
+### Localization and Accessibility
+
+- Bengali is selected by default.
+- English can be selected from the language control.
+- Language preference is stored once per device and survives sign-in,
+  sign-out, force-stop, and restart.
+- Different devices may keep different language choices for the same account.
+- All times remain English 12-hour `AM/PM` strings in both modes.
+- Matching semantic font weights keep Bengali and English emphasis consistent.
+- Bundled Manrope and Noto Sans Bengali fonts work without a network request.
+- Tooltips, semantic logo labels, stable control dimensions, and responsive
+  text behavior support accessible interaction.
+
+### Branding
+
+- Custom MediMind launcher icon at every Android density.
+- Adaptive and round Android launcher icons.
+- Branded legacy and Android 12+ splash screens.
+- Tasteful logo placement on sign-in and active reminder surfaces, with the
+  MediMind wordmark restored on the dashboard.
+- Android-compatible monochrome notification icon.
+
+### Local-First Storage and Backup
+
+- Hive stores medicine records locally and remains the source of truth.
+- Local medicine records are isolated by account on shared devices.
+- Signing in first checks Firestore and stores missing cloud reminders locally.
+- When the same reminder exists locally and in Firestore, the most recently
+  updated version wins.
+- A local save completes before report generation, notification rescheduling,
+  or cloud work.
+- Background maintenance is serialized and coalesced for responsive UI.
+- Automatic backup is triggered by state changes rather than a polling loop:
+  - Medicine added
+  - Medicine edited
+  - Medicine deleted
+  - Medicine marked taken or not taken
+- Manual backup remains available from the dashboard.
+- The Backup button displays a spinner and `Backing up...` during manual or
+  automatic uploads.
+- Backups retry when connectivity returns.
+- Failed transient uploads use increasing retry delays.
+- Permission failures pause repeated cloud attempts while local functionality
+  remains available.
+- Local deletion tombstones ensure the next successful backup also removes
+  deleted cloud records.
+- Medicine image bytes remain available locally; Firebase Storage stores the
+  cloud copy when configured.
+
+## Reminder Experience
+
+### When Another App Is Open
+
+Android shows a high-priority heads-up banner and adds the reminder to the
+notification panel. The alert includes sound, vibration, medicine details, and
+Taken/Not taken actions. MediMind does not force itself over the current app.
+
+### When the Phone Is Locked
+
+A companion `RTC_WAKEUP` alarm briefly wakes the Android display without
+launching MediMind. The high-priority notification then appears on the lock
+screen with sound, vibration, grouped medicine details, and actions.
+
+### When MediMind Is Open
+
+The app presents a centered reminder dialog over a blurred background. It
+includes:
+
+- Reminder title and instruction.
+- Every medicine due at that minute.
+- Dosage information.
+- Taken and Not taken actions.
+- A close button.
+
+Opening a notification routes to the same in-app reminder dialog. Multiple
+medicines scheduled for one minute remain grouped throughout the lock screen,
+notification panel, and in-app experience.
+
+### Notification Behavior
+
+- Android category: alarm.
+- Maximum Android importance and priority.
+- Public lock-screen visibility.
+- Sound, vibration, lights, and time-sensitive delivery.
+- Exact scheduling where the operating system grants exact-alarm access.
+- Inexact while-idle fallback when exact scheduling is unavailable.
+- Scheduled reminders restored after supported reboot events.
+- iOS notifications use the Time Sensitive interruption level.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI[Flutter presentation] --> Repository[Medication repository]
+    Repository --> Hive[(Hive local storage)]
+    Repository --> Planner[Notification planner]
+    Planner --> OS[Android / iOS notifications]
+    Repository --> Reports[Local report builder]
+    Repository --> Sync[Backup coordinator]
+    Sync --> Firestore[(Cloud Firestore)]
+    Sync --> Storage[(Firebase Storage)]
+    Connectivity[Connectivity monitor] --> Sync
+```
+
+The codebase follows feature-oriented layers:
+
+- **Presentation** owns screens, widgets, localization, and interaction state.
+- **Domain** owns medication models, recurrence rules, validation, reports, and
+  repository contracts.
+- **Data** owns Hive and Firebase data sources, notification delivery, action
+  persistence, and synchronization.
+
+Hive remains the active runtime data source. At session startup, Firestore is
+merged into the account's local store; newer cloud records are downloaded,
+while newer local records are retained for the next backup.
+
+## Technology Stack
 
 | Area | Technology |
 | --- | --- |
-| UI | Flutter and Material 3 |
+| Application | Flutter, Dart, Material 3 |
 | Authentication | Firebase Authentication |
-| Cloud database | Cloud Firestore |
-| Photo backup | Firebase Storage |
 | Local database | Hive |
-| Notifications | flutter_local_notifications |
-| Connectivity monitoring | connectivity_plus |
-| Google sign-in | google_sign_in |
-| Image capture | image_picker |
-| Time-zone scheduling | timezone, configured for Asia/Dhaka |
-| Localization | Custom English and Bengali localization scope |
-| Typography | Bundled Manrope and Noto Sans Bengali fonts |
+| Cloud database | Cloud Firestore |
+| Image backup | Firebase Storage |
+| Notifications | `flutter_local_notifications` |
+| Scheduling | `timezone`, Android `AlarmManager` |
+| Connectivity | `connectivity_plus` |
+| Google sign-in | `google_sign_in` |
+| Camera | `image_picker` |
+| Web links | `url_launcher` |
+| Typography | Manrope, Noto Sans Bengali |
+| Testing | `flutter_test` |
 
-## Project structure
+## Project Structure
 
 ```text
-lib/
-  app.dart                         Application composition and dependencies
-  firebase_options.dart            Generated Firebase platform configuration
-  core/
-    config/                         Environment-specific Firebase behavior
-    constants/                      Firestore collection names
-    localization/                   English and Bengali text and language state
-    theme/                          Colors, typography, and font licenses
-  features/
-    auth/
-      data/                         Firebase authentication implementation
-      domain/                       Authentication contracts and phone parsing
-      presentation/                 Login and phone verification screens
-    medication_reminder/
-      data/
-        datasources/                Hive and Firebase data access
-        repositories/               Local-first repository implementation
-        services/                   Notifications and synchronization
-      domain/                       Medication model and repository contract
-      presentation/                 Dashboard and medicine form
-assets/fonts/                       Bundled fonts and license files
-test/                               Unit and widget tests
-android/                            Android runner and configuration
-ios/                                iOS runner and configuration
-web/                                Web entry point, manifest, and icons
+MediMind/
+|-- android/                         Android host, icons, wake alarms, manifest
+|-- assets/
+|   |-- fonts/                       Bundled fonts and license files
+|   `-- images/                      Shared MediMind logo
+|-- ios/                             iOS runner and configuration
+|-- lib/
+|   |-- app.dart                     Dependency composition and MaterialApp
+|   |-- core/
+|   |   |-- config/                  Firebase environment behavior
+|   |   |-- constants/               Shared collection names
+|   |   |-- formatting/              Consistent 12-hour time formatting
+|   |   |-- localization/            Bengali/English strings and preferences
+|   |   |-- theme/                   Palette, typography, licenses
+|   |   `-- widgets/                 Shared UI primitives and branding
+|   `-- features/
+|       |-- auth/
+|       |   |-- data/                Firebase authentication implementation
+|       |   |-- domain/              Auth contracts and phone normalization
+|       |   `-- presentation/        Sign-in and OTP screens
+|       `-- medication_reminder/
+|           |-- data/
+|           |   |-- datasources/     Hive and Firebase persistence
+|           |   |-- repositories/    Local-first coordination
+|           |   `-- services/        Notifications, actions, synchronization
+|           |-- domain/              Models, validation, reports
+|           `-- presentation/        Dashboard, editor, and reports
+|-- test/                            Unit and widget tests
+|-- web/                             Web host and PWA metadata
+|-- firebase.json                    Firebase project mapping
+|-- firestore.rules                  Owner-scoped Firestore rules
+`-- pubspec.yaml                     Packages, fonts, assets, app version
 ```
 
-## Prerequisites
+## Getting Started
 
-Install the following before running the project:
+### Prerequisites
 
-1. Flutter with a Dart SDK compatible with `^3.9.0`.
-2. Android Studio and an Android SDK for Android development.
-3. Xcode and CocoaPods on macOS for iOS development.
-4. Chrome or another supported browser for Flutter web development.
-5. A Firebase project with Authentication, Firestore, and Storage enabled.
-6. The FlutterFire CLI if the Firebase configuration must be regenerated.
-7. The Firebase CLI if the web build will be deployed to Firebase Hosting.
+- Flutter SDK compatible with Dart `^3.9.0`.
+- Android Studio and Android SDK for Android development.
+- Xcode and CocoaPods on macOS for iOS development.
+- Chrome for Flutter web development.
+- A Firebase project with Authentication and Firestore enabled.
+- Firebase Storage if medicine photo backup is required.
+- FlutterFire CLI when regenerating platform configuration.
 
-Verify the local development environment:
+Verify the environment:
 
-```powershell
-flutter doctor
+```bash
+flutter doctor -v
 flutter devices
 ```
 
-## Initial setup
+### Clone and Install
 
-From the project directory, install dependencies:
-
-```powershell
+```bash
+git clone https://github.com/abdullah2811/MediMind.git
+cd MediMind
 flutter pub get
 ```
 
-The repository currently contains Firebase configuration for the project shown
-in `firebase.json` and `lib/firebase_options.dart`. To use another Firebase
-project, sign in to the Firebase CLI and regenerate the configuration:
+### Firebase Configuration
 
-```powershell
+The repository contains project-specific generated Firebase configuration. To
+connect a different Firebase project:
+
+```bash
 firebase login
 dart pub global activate flutterfire_cli
 flutterfire configure
 ```
 
-Select Android, iOS, and Web when prompted. Confirm that these platform files
-are present or generated correctly:
+Confirm the required files:
 
-- `lib/firebase_options.dart`
-- `android/app/google-services.json`
-- `ios/Runner/GoogleService-Info.plist`, when required by the iOS setup
+```text
+lib/firebase_options.dart
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+```
 
-Do not copy credentials from an unrelated Firebase project. Firebase client
-API keys identify the project but do not replace proper Authentication,
-Firestore, and Storage security rules.
+Do not copy credentials from an unrelated project or commit private signing
+keys.
 
-## Firebase Authentication configuration
+## Firebase Setup
 
-Open Firebase Console, select the project, and go to **Authentication >
-Sign-in method**.
+### Authentication
 
-### Phone authentication
+Enable the providers used by the application:
 
-1. Enable the Phone provider.
-2. Open the SMS region policy and allow Bangladesh.
-3. Use a Firebase billing plan that supports real verification SMS in the
-   target region.
-4. Add fictional test numbers for development and automated manual testing.
-5. For web builds, add every development and production hostname under
-   **Authentication > Settings > Authorized domains**.
-6. For Android, register the application SHA-1 and SHA-256 fingerprints in the
-   Firebase project settings.
+1. **Phone**
+   - Allow Bangladesh in the SMS region policy.
+   - Configure test phone numbers for development.
+   - Register Android SHA-1 and SHA-256 fingerprints.
+   - Add production web hosts to Authorized domains.
+2. **Google**
+   - Enable the Google provider.
+   - Select a support email.
+   - Register Android SHA fingerprints.
+   - Configure the iOS reversed client ID and URL scheme when needed.
 
-The app accepts common Bangladesh mobile-number formats and normalizes them
-before sending them to Firebase. Examples include:
+Accepted Bangladesh phone-number examples:
 
 ```text
 +8801712345678
@@ -169,70 +400,27 @@ before sending them to Firebase. Examples include:
 01712-345678
 ```
 
-Spaces, parentheses, hyphens, and Bengali digits are also accepted. A valid
-number is stored and sent to Firebase as `+8801XXXXXXXXX`.
+All valid inputs are normalized to `+8801XXXXXXXXX`.
 
-### Google/Gmail authentication
+### Firestore
 
-1. Enable the Google provider in Firebase Authentication.
-2. Select a support email for the provider.
-3. Register Android SHA fingerprints.
-4. Complete the iOS URL scheme and reversed client ID configuration if running
-   on iOS.
-5. Add web deployment domains to the authorized-domain list.
-
-## Debug phone authentication
-
-### Recommended: Firebase test phone numbers
-
-In Firebase Console, add a fictional test phone number and a fixed six-digit
-verification code. Then run the application with:
-
-```powershell
-flutter run -d chrome --dart-define=FIREBASE_AUTH_TESTING=true
-```
-
-This mode disables app verification only when both conditions are true:
-
-- Flutter is running a debug build.
-- `FIREBASE_AUTH_TESTING=true` was explicitly supplied.
-
-Only test phone numbers configured in Firebase will work in this mode. Do not
-use real phone numbers while app verification is disabled.
-
-### Real Firebase verification in a debug build
-
-Omit the testing flag:
-
-```powershell
-flutter run -d chrome
-```
-
-Real web phone authentication uses Firebase reCAPTCHA. The visible badge is
-hidden by the web stylesheet, while the required Google Privacy Policy and
-Terms of Service disclosure remains visible on the phone sign-in screen.
-Firebase may still display a reCAPTCHA challenge when a request requires
-additional verification.
-
-For realistic web testing, use an authorized HTTPS domain. Repeated failed
-requests can trigger Firebase throttling even in a development environment.
-
-## Firestore configuration
-
-The application stores each user's medicine documents under:
+Cloud records use these owner-scoped paths:
 
 ```text
 users/{userId}/reminders/{reminderId}
 users/{userId}/reports/{reportId}
 ```
 
-The checked-in `firestore.rules` file only permits the authenticated owner to
-access those paths and validates the owner and document identifiers. Report
-documents are restricted to the supported 7-day and 30-day ranges.
-The path-scoped design also permits safe deletion of a backup that does not yet
-exist without allowing one user to delete another user's data.
+Deploy the checked-in rules:
 
-## Firebase Storage configuration
+```bash
+firebase deploy --only firestore:rules --project medimind-368ed
+```
+
+The supplied rules require an authenticated owner and validate user,
+reminder, and report identifiers.
+
+### Firebase Storage
 
 Medicine photos are uploaded to:
 
@@ -240,413 +428,187 @@ Medicine photos are uploaded to:
 medication_images/{userId}/{medicineId}.jpg
 ```
 
-The checked-in `storage.rules` file permits owner-only access and restricts
-uploads to images smaller than 10 MB.
+Configure owner-only Storage rules before enabling photo backup in a production
+Firebase project. Firestore stores only the resulting download URL, not the
+local image bytes.
 
-Photos are optional and are used only as a visual identification aid. The
-compressed image bytes are stored with the local Hive medicine record so the
-dashboard and notification scheduler do not depend on internet access. During
-backup, the image file is uploaded to Firebase Storage and Firestore stores its
-download URL in the corresponding reminder document; Firestore does not store
-the image bytes themselves. Replacing a photo uploads the new image, and
-deleting a medicine removes its predictable Storage object during the next
-successful backup.
+### Debug Phone Authentication
 
-Deploy both rulesets after signing in to the Firebase CLI:
+Use Firebase-configured fictional test numbers in debug builds:
 
-```powershell
-firebase login
-firebase deploy --only firestore:rules --project medimind-368ed
-firebase deploy --only storage --project medimind-368ed
+```bash
+flutter run -d chrome --dart-define=FIREBASE_AUTH_TESTING=true
 ```
 
-The rule files are connected to those commands through `firebase.json`. If the
-CLI is unavailable, copy `firestore.rules` into **Firestore Database > Rules**
-and `storage.rules` into **Storage > Rules** in Firebase Console, then publish
-each ruleset.
+The testing switch is honored only when both conditions are true:
 
-## Platform permissions
+- Flutter is running in debug mode.
+- `FIREBASE_AUTH_TESTING=true` was explicitly supplied.
+
+Never publish a build that relies on test phone numbers.
+
+## Platform Configuration
 
 ### Android
 
-The Android application needs internet access in release builds. Confirm that
-the following permission is present in
-`android/app/src/main/AndroidManifest.xml`, not only in the debug or profile
-manifest:
+The main manifest declares:
 
-```xml
-<uses-permission android:name="android.permission.INTERNET" />
-```
+- Internet access.
+- Notification permission.
+- Exact-alarm permission.
+- Vibration.
+- Wake lock.
+- Reboot handling for scheduled notifications.
 
-The main manifest declares notification, vibration, exact-alarm, reboot, and
-full-screen-intent permissions. It also registers the scheduled-notification
-action, and reboot receivers required by `flutter_local_notifications`. The app asks
-for notification, exact-alarm, and full-screen-intent access where supported.
-Review current Google Play policy requirements before publishing an application
-that requests exact alarms or full-screen intents.
+Users must grant notifications and, on supported versions, exact-alarm access.
+The launcher icon, adaptive icon, round icon, splash screen, and monochrome
+notification icon are configured under `android/app/src/main/res`.
 
 ### iOS
 
-The medicine form can open the camera through `image_picker`. Add a camera usage
-description to `ios/Runner/Info.plist` before testing photo capture on iOS:
-
-```xml
-<key>NSCameraUsageDescription</key>
-<string>MediMind uses the camera to attach a photo to a medicine.</string>
-```
-
-If photo-library selection is added later, also add the appropriate photo
-library usage description. Notification permissions are requested by the app
-at runtime.
-
-## Offline storage and synchronization
-
-MediMind follows a strict local-first workflow. Hive is always the source of
-truth; automatic synchronization never replaces local data with cloud data.
-
-1. A medicine is saved to Hive immediately.
-2. Local notifications are scheduled immediately.
-3. A cloud backup is requested in the background.
-4. If the device is offline, the local record remains available and usable.
-5. Connectivity changes are monitored while the signed-in dashboard is open.
-6. Rolling 7-day and 30-day report snapshots are generated and stored in a
-   separate Hive box from the same local check-in history.
-7. When a network connection becomes available, local medicines, reports, and
-   pending deletions are uploaded to the user's cloud backup.
-
-The dashboard checks periodically for pending synchronization while a network
-connection is reported. Actual uploads are serialized into one operation.
-Transient failures use an increasing cooldown, while Firestore
-`permission-denied` and internal-client assertion errors pause automatic cloud
-attempts for the signed-in session. This prevents a broken cloud configuration
-from creating a retry storm; local data and reminders continue to work.
-
-Offline deletions are stored as local tombstones. They are sent to Firestore
-before the next backup upload so the online backup matches the local database.
-Report entries already recorded within their time range are retained even if a
-medicine is later deleted.
-
-The manual **Backup** button remains available when at least one medicine
-exists. If manual backup fails because the device is offline, the app confirms
-that the data is saved locally and will be retried later.
-
-## Medication and reminder behavior
-
-Each medicine can include:
-
-- Name.
-- Type: tablet, capsule, syrup, drop, or insulin.
-- Strength value and unit.
-- Optional generic name or formula.
-- Optional company name.
-- Optional notes.
-- Optional photo.
-- One or more medicine reminder times.
-- A dosage value for every reminder time.
-- A repeat schedule: daily, weekly, every 15 days, monthly, or a custom number
-  of days.
-- An optional meal-time relationship.
-
-Dosage units are selected automatically:
-
-| Medicine type | Dosage unit |
-| --- | --- |
-| Tablet | Pill |
-| Capsule | Pill |
-| Syrup | Millilitre |
-| Drop | Drop |
-| Insulin | Units |
-
-Medicine reminders are always enabled. The optional meal reminder can be
-enabled or disabled separately.
-
-Meal times are calculated from the medicine time:
-
-| Selection | Calculation example |
-| --- | --- |
-| 20 minutes before a meal | Medicine at 09:00, meal at 09:20 |
-| With the meal | Medicine at 09:00, meal at 09:00 |
-| 20 minutes after a meal | Medicine at 09:00, meal at 08:40 |
-
-Meal-linked reminders within the same one-hour meal window must resolve to one
-meal time. Exact matches are accepted and combined into one meal notification.
-Contradictory times are rejected before saving, and the form shows the corrected
-medicine time. For example, if an existing 09:00 PM medicine is 20 minutes
-before a 09:20 PM meal, a new medicine taken 30 minutes after that meal must be
-set to 09:50 PM. A proposed 09:30 PM time would imply a conflicting 09:00 PM
-meal and is therefore not saved.
-
-Monthly schedules preserve the starting day where possible and use the final
-day of shorter months. Custom intervals accept whole numbers from 1 through
-365. Reminder occurrences are stored locally as part of the medicine record;
-Firebase remains the backup rather than the source of truth.
-
-Notifications use the `Asia/Dhaka` time zone. Android users may be asked to
-allow notifications, exact alarms, and full-screen alarms. Scheduled Android
-notifications are restored after a device reboot. iOS notifications use the
-Time Sensitive interruption level and may ask users to allow alert, badge, and
-sound permissions. Clock controls and displayed reminder times use a 12-hour
-format.
-
-Android medicine-only and meal-only reminders provide taken/not-taken action
-buttons. When a medicine and meal share one reminder minute, Android shows
-**All taken** and **None taken** so the single merged notification remains
-unambiguous. These actions update Hive and local reports in a background
-workflow: Android first persists the action while the app is sleeping, then
-MediMind applies it to Hive and local reports when the app starts or resumes.
-The result is uploaded during the next successful backup. Notification action
-buttons are not available in the web build.
-
-When a local medicine photo exists, Android uses it as the notification's large
-icon and shows it as expanded artwork for a single-medicine reminder. If a
-merged reminder contains several medicines, one available photo is kept as the
-compact large icon while the text lists every affected medicine.
-
-## Reports
-
-Open reports from the chart icon in the dashboard app bar. Each report has a
-fixed, visible period: the current calendar day plus the preceding 6 or 29
-calendar days. Reports are rebuilt from local check-ins, so opening and reading
-them never depends on internet access.
-
-Each entry includes the medicine name and dosage, scheduled dose time,
-medicine taken/not-taken status, actual medicine time, meal taken/not-taken
-status, actual meal time, and whether the medicine was taken with food. The two
-rolling snapshots are mirrored to Firestore at:
-
-```text
-users/{userId}/reports/last_7_days
-users/{userId}/reports/last_30_days
-```
-
-## Localization and design
-
-- Bengali is the default application language.
-- English can be selected from the segmented language control on the login
-  screen.
-- The brand name is always displayed as `MediMind`.
-- Medicine notifications use the language active when the medicine was saved.
-- Manrope is bundled for English and branding.
-- Noto Sans Bengali is bundled for Bengali text.
-- Both fonts work without downloading font files at runtime.
-
-The font files are distributed under the SIL Open Font License. Their license
-texts are included in `assets/fonts` and registered with Flutter's application
-license registry.
-
-## Running the application
-
-List available devices:
-
-```powershell
-flutter devices
-```
-
-Run on Chrome:
-
-```powershell
-flutter run -d chrome
-```
-
-Run using Flutter's web server:
-
-```powershell
-flutter run -d web-server --web-port 7357
-```
-
-Run on a connected Android device or emulator:
-
-```powershell
-flutter run -d <android-device-id>
-```
-
-Run on an iOS simulator or device from macOS:
-
-```powershell
-flutter run -d <ios-device-id>
-```
-
-## Code quality and tests
-
-Format the source code:
-
-```powershell
-dart format lib test
-```
-
-Run static analysis:
-
-```powershell
-flutter analyze
-```
-
-Run all tests:
-
-```powershell
-flutter test
-```
-
-The test suite covers:
-
-- Bangladesh phone-number normalization.
-- Debug and release Firebase test-mode safeguards.
-- Medication serialization and legacy-data compatibility.
-- All recurrence rules and date-specific notification planning.
-- Ordered dashboard event sequencing for medicine and meal reminders.
-- Local report ranges, detailed actual-time entries, and retained history.
-- Meal-time calculation and contradictory meal-window prevention.
-- Offline deletion persistence.
-- Bengali-first login and language switching.
-- Empty and non-empty dashboard button states.
-- Responsive medicine-form behavior on narrow screens.
-
-Recommended pre-commit verification:
-
-```powershell
-dart format lib test
-flutter analyze
-flutter test
-flutter build web --release
-```
-
-## Release builds
+The iOS runner includes a camera usage description for medicine photos.
+Notification permissions are requested at runtime. Configure the signing team,
+bundle identifier, Firebase plist, and Google URL scheme in Xcode before
+distribution.
 
 ### Web
 
-Build without the Firebase testing flag:
+Phone authentication requires an authorized web domain and may display a
+Firebase reCAPTCHA challenge. Local notification behavior on the web is not
+equivalent to Android or iOS.
 
-```powershell
-flutter build web --release
+## Development
+
+Run on a connected device:
+
+```bash
+flutter run -d <device-id>
 ```
 
-The output is written to `build/web`. Deploy that directory to an HTTPS host,
-then add the production domain to Firebase Authentication's authorized domains.
+Run in Chrome:
 
-The application checks Flutter's release mode in addition to the Dart define.
-App verification therefore remains enabled in release builds even if
-`FIREBASE_AUTH_TESTING=true` is supplied accidentally.
-
-### Android
-
-Build an Android App Bundle for Play Console distribution:
-
-```powershell
-flutter build appbundle --release
+```bash
+flutter run -d chrome
 ```
 
-Build a release APK for direct installation:
+Format and analyze:
 
-```powershell
-flutter build apk --release
-```
-
-Configure a private release signing key before publishing. Do not commit the
-keystore or its passwords.
-
-### iOS
-
-From macOS, build an archive suitable for App Store distribution:
-
-```powershell
-flutter build ipa --release
-```
-
-Configure the Apple signing team, bundle identifier, capabilities, and Firebase
-iOS settings in Xcode before publishing.
-
-## Troubleshooting
-
-### `invalid-app-credential` or `captcha-check-failed`
-
-- Confirm that the current web hostname is an authorized Firebase domain.
-- Refresh the page so Firebase can create a new reCAPTCHA token.
-- Do not reuse an expired verification session.
-- Test real verification from an authorized HTTPS deployment.
-- Use Firebase-configured test phone numbers during local development.
-
-### `too-many-requests`
-
-Firebase temporarily blocks repeated suspicious requests by device, IP address,
-phone number, or project. Stop retrying, wait for the block to expire, and use a
-configured fictional test number for development.
-
-### No verification SMS arrives
-
-- Confirm that Phone authentication is enabled.
-- Confirm that Bangladesh is allowed in the SMS region policy.
-- Confirm that Firebase billing and SMS quota are available.
-- Confirm that the phone number is valid and normalized to `+8801XXXXXXXXX`.
-- Check Firebase Authentication logs and usage limits.
-
-### Google sign-in fails
-
-- Confirm that the Google provider is enabled.
-- Confirm that Android SHA fingerprints are registered.
-- Confirm that the web domain is authorized.
-- Confirm that iOS URL schemes and client identifiers are configured.
-
-### Notifications do not appear
-
-- Grant notification permission.
-- On Android, allow exact alarms when requested.
-- Check that the operating system is not aggressively restricting background
-  activity or battery usage.
-- Confirm that the device time and time zone are correct.
-- Remember that browser builds do not provide the same local-notification
-  behavior as Android and iOS.
-
-### Cloud backup does not complete
-
-- Confirm that the user is still signed in.
-- Deploy the repository's owner-only Firestore rules:
-
-  ```powershell
-  firebase deploy --only firestore:rules --project medimind-368ed
-  ```
-
-- Fully restart the app, then press **Backup** once to resume a cloud session
-  that was paused after `permission-denied`.
-- If the web build still reports a Firestore internal assertion after rules are
-  deployed, first confirm that the local records have backed up successfully,
-  then close its browser tab and clear that site's stored data before reopening
-  it. Clearing site data resets stale Firestore web-client state but also erases
-  that browser's Hive/IndexedDB records; it does not erase records stored in a
-  native Android installation.
-- Check Firestore and Storage security rules if photo upload alone fails.
-- Check Firebase quotas and billing.
-- Confirm that the network has actual internet access, not only a Wi-Fi or
-  cellular connection indicator.
-- Leave the dashboard open briefly after connectivity returns so the automatic
-  retry can run.
-
-### Dependency or build problems
-
-Run:
-
-```powershell
-flutter clean
-flutter pub get
+```bash
+dart format lib test
 flutter analyze
 ```
 
-If the problem persists, compare `flutter doctor -v` with the platform
-requirements and confirm that the selected Flutter SDK supports Dart 3.9.
+## Testing
 
-## Security and privacy notes
+Run the complete suite:
 
-- Phone numbers used for Firebase phone authentication are processed by Google
-  and Firebase for verification and abuse prevention.
-- The application does not contain a custom password authentication system.
-- Do not log verification codes, authentication tokens, or private user data.
-- Do not use open Firestore or Storage rules in production.
-- Medicine photos can contain sensitive information and must remain protected by
-  owner-only Storage rules.
-- The reCAPTCHA badge is hidden only because the required reCAPTCHA disclosure
-  remains visible in the phone-authentication flow.
+```bash
+flutter test
+```
+
+The current suite contains 66 passing unit and widget tests covering:
+
+- Bangladesh phone-number normalization.
+- Firebase testing-mode safeguards.
+- Medication serialization and legacy compatibility.
+- Recurrence behavior and custom interval persistence.
+- Duplicate medicine detection.
+- Same-minute notification grouping.
+- Notification action persistence.
+- Local report generation and retained history.
+- Offline deletion tombstones.
+- Per-device language preference persistence.
+- Per-account local medicine isolation.
+- Firestore-to-local hydration and newest-version conflict handling.
+- Delete confirmation and cancellation behavior.
+- English 12-hour time formatting.
+- Bengali and English typography parity.
+- Responsive dashboard and medicine form layouts.
+- Branded sign-in, dashboard, and reminder surfaces.
+- Medicine status actions and grouped in-app reminders.
+
+Recommended pre-release verification:
+
+```bash
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+flutter test
+flutter build apk --release
+```
+
+## Release Builds
+
+The current application version is `1.0.0+1`.
+
+### Android APK
+
+```bash
+flutter build apk --release
+```
+
+Output:
+
+```text
+build/app/outputs/flutter-apk/app-release.apk
+```
+
+### Android App Bundle
+
+```bash
+flutter build appbundle --release
+```
+
+Configure a private production signing key before Play Store distribution. The
+repository currently uses debug signing for local release builds.
+
+### Web
+
+```bash
+flutter build web --release
+```
+
+Deploy `build/web` to HTTPS and add its hostname to Firebase Authentication
+Authorized domains.
+
+### iOS
+
+```bash
+flutter build ipa --release
+```
+
+Run this command on macOS after configuring signing and Firebase in Xcode.
+
+## Security and Privacy
+
+- Medicine schedules and adherence history are health-related personal data.
+- Local Hive data remains on the device unless the user initiates or triggers a
+  configured backup.
+- Firebase paths are scoped by authenticated user ID.
+- Medicine images require owner-only Storage rules.
+- Verification codes, tokens, signing keys, and private user data must never be
+  logged or committed.
+- Firebase client configuration identifies a project but does not replace
+  secure Firestore and Storage rules.
+- Clearing browser site data also removes that browser's local Hive/IndexedDB
+  records.
+
+## Known Platform Constraints
+
+- Exact Android delivery depends on notification permission, exact-alarm
+  access, device battery policy, and manufacturer background restrictions.
+- Users can disable sound, vibration, heads-up banners, or lock-screen
+  visibility at the Android notification-channel level.
+- Android screen wake uses a timed wake lock and does not bypass the device
+  lock screen.
+- iOS controls notification presentation and does not expose Android's screen
+  wake mechanism.
+- Web builds do not support the same native background notification actions.
+- Cloud backup requires correctly deployed Firebase rules and connectivity;
+  local medicine data remains usable if cloud services are unavailable.
 
 ## License
 
-No application-level license has been declared in this repository. Add a
-project license before public distribution. Third-party packages retain their
-respective licenses, and bundled font licenses are included under
+No application-level open-source license has been declared. Add a project
+license before public redistribution. Third-party packages retain their own
+licenses, and the bundled font license texts are available under
 `assets/fonts`.
