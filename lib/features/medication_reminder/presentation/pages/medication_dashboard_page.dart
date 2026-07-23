@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../../../../core/formatting/app_time_format.dart';
 import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/inline_button_progress.dart';
 import '../../data/services/medication_notification_service.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
@@ -45,12 +46,15 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   Future<List<Medication>>? _medicationsFuture;
   List<Medication> _loadedMedications = const <Medication>[];
   StreamSubscription<String>? _automaticBackupSubscription;
+  StreamSubscription<bool>? _backupProgressSubscription;
   StreamSubscription<String>? _openedReminderSubscription;
   OverlayEntry? _foregroundReminderEntry;
   String? _lastForegroundReminderKey;
   String? _pendingOpenedReminderPayload;
   bool _checkedRecentReminderOnLoad = false;
   bool _manualBackupInProgress = false;
+  bool _backupInProgress = false;
+  bool _signOutInProgress = false;
 
   @override
   void initState() {
@@ -74,6 +78,13 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
             SnackBar(content: Text(context.tr('automatic_backup_complete'))),
           );
         });
+    _backupInProgress = widget.repository.isBackupInProgress;
+    _backupProgressSubscription = widget.repository.backupInProgressChanged
+        .listen((inProgress) {
+          if (mounted) {
+            setState(() => _backupInProgress = inProgress);
+          }
+        });
     _openedReminderSubscription = widget.repository.openedReminderPayloads
         .listen(_handleOpenedReminderPayload);
     _pendingOpenedReminderPayload = widget.repository
@@ -87,6 +98,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
     _clockTimer?.cancel();
     _hideForegroundReminder();
     unawaited(_automaticBackupSubscription?.cancel());
+    unawaited(_backupProgressSubscription?.cancel());
     unawaited(_openedReminderSubscription?.cancel());
     unawaited(widget.repository.stopAutoSync());
     super.dispose();
@@ -342,7 +354,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   }
 
   Future<void> _backup() async {
-    _manualBackupInProgress = true;
+    if (_manualBackupInProgress || _backupInProgress) {
+      return;
+    }
+    setState(() => _manualBackupInProgress = true);
     try {
       await widget.repository.backupToCloud(uid: widget.uid);
       if (mounted) {
@@ -358,7 +373,23 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
         ).showSnackBar(SnackBar(content: Text(context.tr('backup_waiting'))));
       }
     } finally {
-      _manualBackupInProgress = false;
+      if (mounted) {
+        setState(() => _manualBackupInProgress = false);
+      }
+    }
+  }
+
+  Future<void> _signOut() async {
+    if (_signOutInProgress) {
+      return;
+    }
+    setState(() => _signOutInProgress = true);
+    try {
+      await widget.onSignOut();
+    } finally {
+      if (mounted) {
+        setState(() => _signOutInProgress = false);
+      }
     }
   }
 
@@ -711,8 +742,16 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                       ),
                       IconButton(
                         tooltip: context.tr('sign_out'),
-                        onPressed: widget.onSignOut,
-                        icon: const Icon(Icons.logout_outlined),
+                        onPressed: _signOutInProgress ? null : _signOut,
+                        icon: _signOutInProgress
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                ),
+                              )
+                            : const Icon(Icons.logout_outlined),
                       ),
                     ],
                   ),
@@ -751,9 +790,14 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                       sliver: SliverToBoxAdapter(
                         child: _ActionButtons(
                           primaryLabel: context.tr('add_medicine'),
-                          secondaryLabel: context.tr('backup'),
+                          secondaryLabel:
+                              _manualBackupInProgress || _backupInProgress
+                              ? context.tr('backing_up')
+                              : context.tr('backup'),
                           onPrimary: _openAddPage,
                           onSecondary: _backup,
+                          secondaryBusy:
+                              _manualBackupInProgress || _backupInProgress,
                         ),
                       ),
                     ),
@@ -1266,7 +1310,7 @@ class _HeroHeader extends StatelessWidget {
                   left: 4,
                   bottom: 0,
                   child: Text(
-                    context.tr('now'),
+                    formatEnglish12HourDateTime(now),
                     key: const ValueKey('hero-now-time'),
                     style: const TextStyle(
                       color: Colors.white,
@@ -1542,12 +1586,14 @@ class _ActionButtons extends StatelessWidget {
     required this.secondaryLabel,
     required this.onPrimary,
     required this.onSecondary,
+    required this.secondaryBusy,
   });
 
   final String primaryLabel;
   final String secondaryLabel;
   final VoidCallback onPrimary;
   final VoidCallback onSecondary;
+  final bool secondaryBusy;
 
   @override
   Widget build(BuildContext context) {
@@ -1559,12 +1605,15 @@ class _ActionButtons extends StatelessWidget {
         child: Text(primaryLabel, textAlign: TextAlign.center),
       ),
     );
-    final secondary = OutlinedButton.icon(
-      onPressed: onSecondary,
-      icon: const Icon(Icons.cloud_upload_outlined),
-      label: Padding(
+    final secondary = OutlinedButton(
+      onPressed: secondaryBusy ? null : onSecondary,
+      child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 11),
-        child: Text(secondaryLabel, textAlign: TextAlign.center),
+        child: InlineButtonProgress(
+          label: secondaryLabel,
+          inProgress: secondaryBusy,
+          icon: const Icon(Icons.cloud_upload_outlined),
+        ),
       ),
     );
     return Row(

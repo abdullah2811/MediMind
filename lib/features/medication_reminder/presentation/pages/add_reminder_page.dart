@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../../core/formatting/app_time_format.dart';
 import '../../../../core/localization/app_localization.dart';
+import '../../../../core/widgets/inline_button_progress.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
@@ -221,24 +222,24 @@ class _AddReminderPageState extends State<AddReminderPage> {
         return;
       }
     }
-    final existingMedications = await _existingMedicationsFuture;
-    if (!mounted) {
-      return;
-    }
-    final matchingMedication = findMatchingMedication(
-      medicineName: _medicineController.text,
-      formula: _formulaController.text,
-      doses: doses,
-      existingMedications: existingMedications,
-      excludedMedicationId: widget.existingMedication?.id,
-    );
-    if (matchingMedication != null) {
-      _showMessage(context.tr('matching_reminder_error'));
-      return;
-    }
-
     setState(() => _busy = true);
     try {
+      final existingMedications = await _existingMedicationsFuture;
+      if (!mounted) {
+        return;
+      }
+      final matchingMedication = findMatchingMedication(
+        medicineName: _medicineController.text,
+        formula: _formulaController.text,
+        doses: doses,
+        existingMedications: existingMedications,
+        excludedMedicationId: widget.existingMedication?.id,
+      );
+      if (matchingMedication != null) {
+        _showMessage(context.tr('matching_reminder_error'));
+        return;
+      }
+
       final now = DateTime.now();
       final existing = widget.existingMedication;
       final doseSummary = doses.map((dose) => dose.summary).join(' • ');
@@ -266,8 +267,9 @@ class _AddReminderPageState extends State<AddReminderPage> {
         mealTimes: const <String>[],
         checkIns: existing?.checkIns ?? const <MedicationCheckIn>[],
         scheduleFrequency: _scheduleFrequency,
-        customIntervalDays:
-            int.tryParse(_customIntervalController.text.trim()) ?? 1,
+        customIntervalDays: _scheduleFrequency == 'custom'
+            ? int.tryParse(_customIntervalController.text.trim()) ?? 1
+            : 1,
         scheduleStartDate: existing?.scheduleStartDate ?? now,
         notes: _emptyToNull(_notesController.text),
         isActive: true,
@@ -571,8 +573,11 @@ class _AddReminderPageState extends State<AddReminderPage> {
               onPressed: _busy ? null : _saveReminder,
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 14),
-                child: Text(
-                  context.tr(isEditing ? 'update_medicine' : 'save_medicine'),
+                child: InlineButtonProgress(
+                  label: context.tr(
+                    isEditing ? 'update_medicine' : 'save_medicine',
+                  ),
+                  inProgress: _busy,
                 ),
               ),
             ),

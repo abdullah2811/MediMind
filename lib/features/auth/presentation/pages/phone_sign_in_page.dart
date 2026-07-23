@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:url_launcher/link.dart';
 
 import '../../../../core/localization/app_localization.dart';
+import '../../../../core/widgets/inline_button_progress.dart';
 import '../../domain/auth_repository.dart';
 import '../../domain/bangladesh_phone_number.dart';
 
@@ -21,7 +22,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
   final _formKey = GlobalKey<FormState>();
   final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
-  bool _busy = false;
+  _PhoneOperation? _operation;
   String? _verificationId;
   String? _normalizedPhoneNumber;
 
@@ -41,7 +42,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
       _phoneController.text,
     );
 
-    setState(() => _busy = true);
+    setState(() => _operation = _PhoneOperation.sendingCode);
     try {
       await widget.authRepository.sendPhoneVerificationCode(
         phoneNumber: normalizedPhoneNumber,
@@ -68,7 +69,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
       }
     } finally {
       if (mounted) {
-        setState(() => _busy = false);
+        setState(() => _operation = null);
       }
     }
   }
@@ -88,7 +89,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
       return;
     }
 
-    setState(() => _busy = true);
+    setState(() => _operation = _PhoneOperation.verifying);
     try {
       await widget.authRepository.signInWithSmsCode(
         verificationId: verificationId,
@@ -103,7 +104,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
       }
     } finally {
       if (mounted) {
-        setState(() => _busy = false);
+        setState(() => _operation = null);
       }
     }
   }
@@ -173,7 +174,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
                 }
               },
               onFieldSubmitted: (_) {
-                if (!_busy) {
+                if (_operation == null) {
                   _requestCode();
                 }
               },
@@ -181,10 +182,13 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
           ),
           const SizedBox(height: 12),
           FilledButton(
-            onPressed: _busy ? null : _requestCode,
+            onPressed: _operation == null ? _requestCode : null,
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 14),
-              child: Text(context.tr('send_code')),
+              child: InlineButtonProgress(
+                label: context.tr('send_code'),
+                inProgress: _operation == _PhoneOperation.sendingCode,
+              ),
             ),
           ),
           if (_normalizedPhoneNumber case final phoneNumber?) ...[
@@ -208,10 +212,13 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
           ),
           const SizedBox(height: 12),
           OutlinedButton(
-            onPressed: _busy ? null : _verify,
+            onPressed: _operation == null ? _verify : null,
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 14),
-              child: Text(context.tr('verify_and_sign_in')),
+              child: InlineButtonProgress(
+                label: context.tr('verify_and_sign_in'),
+                inProgress: _operation == _PhoneOperation.verifying,
+              ),
             ),
           ),
           if (kIsWeb) ...[
@@ -223,6 +230,8 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
     );
   }
 }
+
+enum _PhoneOperation { sendingCode, verifying }
 
 class _RecaptchaDisclosure extends StatelessWidget {
   const _RecaptchaDisclosure();

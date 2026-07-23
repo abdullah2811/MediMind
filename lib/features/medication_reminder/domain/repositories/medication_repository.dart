@@ -3,6 +3,8 @@ import '../models/medication_report.dart';
 
 abstract class MedicationRepository {
   Stream<String> get automaticBackupSucceeded => const Stream<String>.empty();
+  Stream<bool> get backupInProgressChanged => const Stream<bool>.empty();
+  bool get isBackupInProgress => false;
   Stream<String> get openedReminderPayloads => const Stream<String>.empty();
 
   String? takePendingOpenedReminderPayload() => null;

@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
@@ -88,6 +89,7 @@ class MedicationNotificationService {
   // created. A new id ensures existing installs receive the corrected alarm
   // importance, sound, vibration, and lock-screen visibility settings.
   static const _channelId = 'medimind_critical_reminders_v5';
+  static const _wakeScreenChannel = MethodChannel('medimind/wake_screen');
   final FlutterLocalNotificationsPlugin _plugin;
   final StreamController<String> _openedReminderController =
       StreamController<String>.broadcast();
@@ -243,10 +245,9 @@ class MedicationNotificationService {
     final maxEvents = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
         ? 60
         : 360;
-    for (final event in buildMedicationReminderPlan(
-      medications,
-      maxEvents: maxEvents,
-    )) {
+    final plan = buildMedicationReminderPlan(medications, maxEvents: maxEvents);
+    await _replaceWakeAlarms(const <MedicationReminderPlanItem>[]);
+    for (final event in plan) {
       final trigger = tz.TZDateTime.from(event.scheduledAt, tz.local);
       final content = _notificationContent(event);
       final details = _notificationDetails(
@@ -269,6 +270,7 @@ class MedicationNotificationService {
             UILocalNotificationDateInterpretation.absoluteTime,
       );
     }
+    await _replaceWakeAlarms(plan);
   }
 
   Future<void> cancelMedication(Medication medication) async {
@@ -277,6 +279,7 @@ class MedicationNotificationService {
     }
     await initialize();
     await _plugin.cancelAll();
+    await _replaceWakeAlarms(const <MedicationReminderPlanItem>[]);
   }
 
   Future<void> cancelMedicationById(String medicationId) async {
@@ -285,6 +288,32 @@ class MedicationNotificationService {
     }
     await initialize();
     await _plugin.cancelAll();
+    await _replaceWakeAlarms(const <MedicationReminderPlanItem>[]);
+  }
+
+  Future<void> _replaceWakeAlarms(List<MedicationReminderPlanItem> plan) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return;
+    }
+    try {
+      await _wakeScreenChannel.invokeMethod<void>(
+        'replaceWakeAlarms',
+        plan
+            .map(
+              (event) => <String, int>{
+                'id': _notificationId(event),
+                'scheduledAtMilliseconds':
+                    event.scheduledAt.millisecondsSinceEpoch,
+              },
+            )
+            .toList(growable: false),
+      );
+    } on MissingPluginException {
+      // The Android host is unavailable in unit tests and non-mobile embeds.
+    } catch (error, stackTrace) {
+      debugPrint('Could not schedule reminder screen wake: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    }
   }
 
   NotificationDetails _notificationDetails(

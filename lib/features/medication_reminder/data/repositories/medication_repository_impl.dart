@@ -43,6 +43,13 @@ class MedicationRepositoryImpl implements MedicationRepository {
       _syncService.automaticBackupSucceeded;
 
   @override
+  Stream<bool> get backupInProgressChanged =>
+      _syncService.backupInProgressChanged;
+
+  @override
+  bool get isBackupInProgress => _syncService.isBackupInProgress;
+
+  @override
   Stream<String> get openedReminderPayloads =>
       _notificationService.openedReminderPayloads;
 

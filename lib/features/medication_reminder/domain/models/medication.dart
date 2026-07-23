@@ -223,7 +223,9 @@ class Medication {
     'mealTimes': mealTimes,
     'checkIns': checkIns.map((item) => item.toJson()).toList(growable: false),
     'scheduleFrequency': scheduleFrequency,
-    'customIntervalDays': customIntervalDays,
+    'customIntervalDays': scheduleFrequency == 'custom'
+        ? customIntervalDays
+        : null,
     'scheduleStartDate': scheduleStartDate.toIso8601String(),
     'notes': notes,
     'isActive': isActive,
@@ -282,7 +284,9 @@ class Medication {
     'mealTimes': mealTimes,
     'checkIns': checkIns.map((item) => item.toJson()).toList(growable: false),
     'scheduleFrequency': scheduleFrequency,
-    'customIntervalDays': customIntervalDays,
+    'customIntervalDays': scheduleFrequency == 'custom'
+        ? customIntervalDays
+        : FieldValue.delete(),
     'scheduleStartDate': Timestamp.fromDate(scheduleStartDate),
     'imagePath': _cloudImageValue(imageUrlOverride),
     'notes': notes,

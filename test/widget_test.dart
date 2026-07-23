@@ -17,6 +17,12 @@ class FakeMedicationRepository implements MedicationRepository {
   Stream<String> get automaticBackupSucceeded => const Stream<String>.empty();
 
   @override
+  Stream<bool> get backupInProgressChanged => const Stream<bool>.empty();
+
+  @override
+  bool get isBackupInProgress => false;
+
+  @override
   Stream<String> get openedReminderPayloads => const Stream<String>.empty();
 
   @override
@@ -228,6 +234,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const ValueKey('hero-now-time')), findsOneWidget);
+    final currentTime = tester.widget<Text>(
+      find.byKey(const ValueKey('hero-now-time')),
+    );
+    expect(
+      currentTime.data,
+      matches(RegExp(r'^(?:1[0-2]|[1-9]):[0-5]\d (?:AM|PM)$')),
+    );
     expect(tester.takeException(), isNull);
   });
 

@@ -41,9 +41,14 @@ class MedicationSyncService {
   Timer? _retryTimer;
   final StreamController<String> _automaticBackupSucceeded =
       StreamController<String>.broadcast();
+  final StreamController<bool> _backupInProgressChanged =
+      StreamController<bool>.broadcast();
+  bool _isBackupInProgress = false;
 
   Stream<String> get automaticBackupSucceeded =>
       _automaticBackupSucceeded.stream;
+  Stream<bool> get backupInProgressChanged => _backupInProgressChanged.stream;
+  bool get isBackupInProgress => _isBackupInProgress;
 
   void startSession(String uid) {
     if (_sessionUid == uid) {
@@ -216,6 +221,7 @@ class MedicationSyncService {
       return running;
     }
 
+    _setBackupInProgress(true);
     late final Future<void> operation;
     operation = _backup(uid)
         .then((_) {
@@ -231,10 +237,19 @@ class MedicationSyncService {
         .whenComplete(() {
           if (identical(_backupInFlight, operation)) {
             _backupInFlight = null;
+            _setBackupInProgress(false);
           }
         });
     _backupInFlight = operation;
     return operation;
+  }
+
+  void _setBackupInProgress(bool value) {
+    if (_isBackupInProgress == value) {
+      return;
+    }
+    _isBackupInProgress = value;
+    _backupInProgressChanged.add(value);
   }
 
   Future<void> backupNow({required String uid}) async {
