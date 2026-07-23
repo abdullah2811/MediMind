@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../../core/formatting/app_time_format.dart';
 import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../domain/models/medication_report.dart';
@@ -232,22 +233,10 @@ class _ReportSummary extends StatelessWidget {
         icon: Icons.medication_liquid_outlined,
         color: AppPalette.persimmon,
       ),
-      (
-        label: context.tr('meals_taken'),
-        value: report.mealsTaken,
-        icon: Icons.restaurant_outlined,
-        color: AppPalette.plum,
-      ),
-      (
-        label: context.tr('meals_not_taken'),
-        value: report.mealsNotTaken,
-        icon: Icons.no_meals_outlined,
-        color: AppPalette.saffron,
-      ),
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 650 ? 4 : 2;
+        const columns = 2;
         final width = (constraints.maxWidth - (columns - 1) * 10) / columns;
         return Wrap(
           spacing: 10,
@@ -369,17 +358,7 @@ class _ReportEntryCard extends StatelessWidget {
             label: context.tr('medicine_status'),
             status: entry.medicineStatus,
             recordedAt: entry.medicineTakenAt,
-            suffix: entry.takenWithMeal ? context.tr('with_food') : null,
           ),
-          if (entry.mealStatus != null || entry.mealTakenAt != null) ...[
-            const SizedBox(height: 8),
-            _ReportStatusLine(
-              icon: Icons.restaurant_outlined,
-              label: context.tr('meal_status'),
-              status: entry.mealStatus,
-              recordedAt: entry.mealTakenAt,
-            ),
-          ],
         ],
       ),
     );
@@ -392,14 +371,12 @@ class _ReportStatusLine extends StatelessWidget {
     required this.label,
     required this.status,
     required this.recordedAt,
-    this.suffix,
   });
 
   final IconData icon;
   final String label;
   final String? status;
   final DateTime? recordedAt;
-  final String? suffix;
 
   @override
   Widget build(BuildContext context) {
@@ -412,7 +389,6 @@ class _ReportStatusLine extends StatelessWidget {
     final details = <String>[
       statusLabel,
       if (recordedAt != null) _formatReportDateTime(context, recordedAt!),
-      if (suffix != null) suffix!,
     ].join(' • ');
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -491,10 +467,7 @@ Map<String, List<MedicationReportEntry>> _groupEntries(
 }
 
 String _formatReportTime(BuildContext context, DateTime value) {
-  return MaterialLocalizations.of(context).formatTimeOfDay(
-    TimeOfDay.fromDateTime(value),
-    alwaysUse24HourFormat: false,
-  );
+  return formatEnglish12HourDateTime(value);
 }
 
 String _formatReportDateTime(BuildContext context, DateTime value) {

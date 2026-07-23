@@ -2,6 +2,11 @@ import '../models/medication.dart';
 import '../models/medication_report.dart';
 
 abstract class MedicationRepository {
+  Stream<String> get automaticBackupSucceeded => const Stream<String>.empty();
+  Stream<String> get openedReminderPayloads => const Stream<String>.empty();
+
+  String? takePendingOpenedReminderPayload() => null;
+
   Future<List<Medication>> getAll({required String uid});
   Future<Medication?> getById(String id);
   Future<void> add({required String uid, required Medication medication});

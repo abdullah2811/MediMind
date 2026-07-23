@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../../../../core/localization/app_localization.dart';
 import '../../../medication_reminder/domain/repositories/medication_repository.dart';
 import '../../../medication_reminder/presentation/pages/medication_dashboard_page.dart';
 import '../../data/session_activity_store.dart';
@@ -29,6 +30,8 @@ class AuthGate extends StatefulWidget {
 class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   String? _validatedUid;
   Future<bool>? _validation;
+  String? _languageUid;
+  bool _languageBindingInitialized = false;
 
   bool get _usesMobileSessionPolicy {
     return !kIsWeb &&
@@ -88,6 +91,20 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     await widget.authRepository.signOut();
   }
 
+  void _bindLanguagePreference(String? uid) {
+    if (_languageBindingInitialized && _languageUid == uid) {
+      return;
+    }
+    _languageBindingInitialized = true;
+    _languageUid = uid;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _languageUid != uid) {
+        return;
+      }
+      unawaited(AppLanguageScope.controllerOf(context).bindUser(uid));
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<AppUser?>(
@@ -95,6 +112,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       initialData: widget.authRepository.currentUser,
       builder: (context, snapshot) {
         final user = snapshot.data;
+        _bindLanguagePreference(user?.uid);
         if (user == null) {
           _validatedUid = null;
           _validation = null;

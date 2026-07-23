@@ -6,7 +6,7 @@ void main() {
   Medication medication({
     required String id,
     required String doseTime,
-    required int mealOffset,
+    int mealOffset = 0,
     String scheduleFrequency = 'daily',
     int customIntervalDays = 1,
   }) {
@@ -33,7 +33,7 @@ void main() {
     );
   }
 
-  test('overlapping meal reminders are merged into one clock event', () {
+  test('meal scheduling settings never create reminder events', () {
     final plan = buildMedicationReminderPlan(
       [
         medication(id: 'Before', doseTime: '08:40', mealOffset: -20),
@@ -43,38 +43,30 @@ void main() {
       horizonDays: 0,
     );
 
-    expect(plan.map((item) => _clock(item.scheduledAt)), [
-      '08:40',
-      '09:00',
-      '09:20',
-    ]);
-    final mealEvent = plan.singleWhere(
-      (item) => _clock(item.scheduledAt) == '09:00',
-    );
-    expect(mealEvent.hasMedicine, isFalse);
-    expect(
-      mealEvent.meals.map((item) => item.medication.id),
-      containsAll(['Before', 'After']),
-    );
+    expect(plan.map((item) => _clock(item.scheduledAt)), ['08:40', '09:20']);
   });
 
-  test('medicine taken with a meal creates one combined reminder', () {
+  test('medicines at one time are grouped into one reminder event', () {
     final plan = buildMedicationReminderPlan(
-      [medication(id: 'Together', doseTime: '12:00', mealOffset: 0)],
+      [
+        medication(id: 'First', doseTime: '12:00'),
+        medication(id: 'Second', doseTime: '12:00'),
+      ],
       from: DateTime(2026, 7, 22, 11),
       horizonDays: 0,
     );
 
     expect(plan, hasLength(1));
-    expect(plan.single.hasMedicine, isTrue);
-    expect(plan.single.hasMeal, isTrue);
+    expect(plan.single.doses.map((item) => item.medication.id), [
+      'First',
+      'Second',
+    ]);
   });
 
   test('weekly medicine is only planned on its recurrence day', () {
     final medicine = medication(
       id: 'Weekly',
       doseTime: '09:00',
-      mealOffset: 0,
       scheduleFrequency: 'weekly',
     );
 
@@ -100,7 +92,6 @@ void main() {
         medication(
           id: 'Custom',
           doseTime: '09:00',
-          mealOffset: 0,
           scheduleFrequency: 'custom',
           customIntervalDays: 3,
         ),

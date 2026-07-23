@@ -1,18 +1,46 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
+import 'app_language_preference_store.dart';
 
 class AppLanguageController extends ValueNotifier<Locale> {
-  AppLanguageController() : super(const Locale('bn'));
+  AppLanguageController({AppLanguagePreferenceStore? preferenceStore})
+    : _preferenceStore = preferenceStore,
+      super(const Locale('bn'));
+
+  final AppLanguagePreferenceStore? _preferenceStore;
+  String? _activeUid;
 
   void toggle() {
-    value = value.languageCode == 'en'
-        ? const Locale('bn')
-        : const Locale('en');
+    setLanguage(value.languageCode == 'en' ? 'bn' : 'en');
   }
 
   void setLanguage(String languageCode) {
     value = Locale(languageCode == 'en' ? 'en' : 'bn');
+    final uid = _activeUid;
+    if (uid != null) {
+      unawaited(_preferenceStore?.write(uid, value.languageCode));
+    }
+  }
+
+  Future<void> bindUser(String? uid) async {
+    _activeUid = uid;
+    if (uid == null) {
+      value = const Locale('bn');
+      return;
+    }
+
+    final stored = await _preferenceStore?.read(uid);
+    if (_activeUid != uid) {
+      return;
+    }
+    if (stored == 'en' || stored == 'bn') {
+      value = Locale(stored!);
+    } else {
+      await _preferenceStore?.write(uid, value.languageCode);
+    }
   }
 
   String get languageCode => value.languageCode;
@@ -143,6 +171,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'add_medicine': 'Add medicine',
     'backup': 'Backup',
     'backup_complete': 'Backup complete.',
+    'automatic_backup_complete': 'Backed up automatically.',
     'backup_waiting': 'Saved on this device. Backup will retry when online.',
     'no_active_medicines': 'No medicines scheduled',
     'next_medicine': 'Next medicine',
@@ -154,6 +183,8 @@ const Map<String, Map<String, String>> _localizedValues = {
     'create_first_reminder_hint':
         'Add a medicine and you will be reminded at the right time.',
     'due_in': 'Due in',
+    'reminder_medicine_title': 'Reminder: Medicine',
+    'reminder_medicine_message': 'Log your data and take your medicine.',
     'refresh_from_cloud': 'Refresh from cloud',
     'sign_out': 'Sign out',
     'no_medicine_saved': 'No medicines saved yet',
@@ -238,6 +269,8 @@ const Map<String, Map<String, String>> _localizedValues = {
     'dose_line_required_error': 'Add at least one reminder time and dosage.',
     'power_required_error': 'Enter the medicine power.',
     'duplicate_dose_time_error': 'Each reminder time must be different.',
+    'matching_reminder_error':
+        'A matching reminder already exists. Change its name, dosage, or formula.',
     'custom_days_error': 'Enter a repeat interval from 1 to 365 days.',
     'meal_minutes_error': 'Enter a meal difference from 1 to 720 minutes.',
     'meal_timing_conflict_title': 'Meal timing conflict',
@@ -260,6 +293,9 @@ const Map<String, Map<String, String>> _localizedValues = {
     'status_taken': 'Taken',
     'status_not_taken': 'Not taken',
     'status_pending': 'Not marked',
+    'edit_consumption_record': 'Edit consumption record',
+    'meal_taken': 'Meal taken',
+    'meal_not_taken': 'Meal not taken',
     'mark_taken': 'Taken',
     'mark_not_taken': 'Not taken',
     'when_taken': 'When was the medicine taken?',
@@ -313,6 +349,7 @@ const Map<String, Map<String, String>> _localizedValues = {
     'add_medicine': 'ওষুধ যোগ করুন',
     'backup': 'ব্যাকআপ নিন',
     'backup_complete': 'ব্যাকআপ সম্পন্ন হয়েছে।',
+    'automatic_backup_complete': 'তথ্য স্বয়ংক্রিয়ভাবে ব্যাকআপ হয়েছে।',
     'backup_waiting': 'এই ডিভাইসে রাখা হয়েছে। ইন্টারনেট এলে ব্যাকআপ হয়ে যাবে।',
     'no_active_medicines': 'এখন কোনো ওষুধের সময় নেই',
     'next_medicine': 'পরের ওষুধ',
@@ -324,6 +361,8 @@ const Map<String, Map<String, String>> _localizedValues = {
     'create_first_reminder_hint':
         'ওষুধ যোগ করলে ঠিক সময়ে আপনাকে মনে করিয়ে দেওয়া হবে।',
     'due_in': 'সময় বাকি',
+    'reminder_medicine_title': 'রিমাইন্ডার: ওষুধ',
+    'reminder_medicine_message': 'তথ্য লিখুন এবং আপনার ওষুধ নিন।',
     'refresh_from_cloud': 'ক্লাউড থেকে হালনাগাদ করুন',
     'sign_out': 'বের হয়ে যান',
     'no_medicine_saved': 'এখনো কোনো ওষুধ যোগ করা হয়নি',
@@ -408,6 +447,8 @@ const Map<String, Map<String, String>> _localizedValues = {
     'dose_line_required_error': 'অন্তত একটি সময় ও খাওয়ার পরিমাণ লিখুন।',
     'power_required_error': 'ওষুধের শক্তি লিখুন।',
     'duplicate_dose_time_error': 'প্রতিটি রিমাইন্ডারের সময় আলাদা হতে হবে।',
+    'matching_reminder_error':
+        'একই ধরনের রিমাইন্ডার আগে থেকেই আছে। নাম, মাত্রা বা উপাদানের তথ্য বদলে দিন।',
     'custom_days_error': '১ থেকে ৩৬৫ দিনের মধ্যে ব্যবধান দিন।',
     'meal_minutes_error': 'খাবারের সঙ্গে ১ থেকে ৭২০ মিনিটের ব্যবধান দিন।',
     'meal_timing_conflict_title': 'খাবারের সময়ে গরমিল আছে',
@@ -430,6 +471,9 @@ const Map<String, Map<String, String>> _localizedValues = {
     'status_taken': 'নিয়েছেন',
     'status_not_taken': 'নেননি',
     'status_pending': 'জানানো হয়নি',
+    'edit_consumption_record': 'খাওয়া-দাওয়ার তথ্য ঠিক করুন',
+    'meal_taken': 'খাবার খেয়েছি',
+    'meal_not_taken': 'খাবার খাইনি',
     'mark_taken': 'নিয়েছি',
     'mark_not_taken': 'নিইনি',
     'when_taken': 'ওষুধটি কখন নিয়েছেন?',

@@ -36,11 +36,23 @@ class MedicationSyncService {
   int _failureCount = 0;
   bool _cloudBackupPaused = false;
   bool _pauseWasLogged = false;
+  bool _backupPending = false;
+  int _pendingRevision = 0;
+  Timer? _retryTimer;
+  final StreamController<String> _automaticBackupSucceeded =
+      StreamController<String>.broadcast();
+
+  Stream<String> get automaticBackupSucceeded =>
+      _automaticBackupSucceeded.stream;
 
   void startSession(String uid) {
     if (_sessionUid == uid) {
       return;
     }
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    _backupPending = false;
+    _pendingRevision++;
     _sessionUid = uid;
     resumeCloudBackups();
   }
@@ -51,6 +63,8 @@ class MedicationSyncService {
     }
     _failureCount = 0;
     _retryAfter = null;
+    _retryTimer?.cancel();
+    _retryTimer = null;
   }
 
   void resumeCloudBackups() {
@@ -58,14 +72,54 @@ class MedicationSyncService {
     _pauseWasLogged = false;
     _failureCount = 0;
     _retryAfter = null;
+    _retryTimer?.cancel();
+    _retryTimer = null;
   }
 
   void queueBackup({required String uid}) {
     startSession(uid);
+    _backupPending = true;
+    _pendingRevision++;
+    _runPendingBackup(uid);
+  }
+
+  void retryPendingBackup({required String uid}) {
+    startSession(uid);
+    if (_backupPending) {
+      _runPendingBackup(uid);
+    }
+  }
+
+  void _runPendingBackup(String uid) {
     if (_cloudBackupPaused || (_retryAfter?.isAfter(DateTime.now()) ?? false)) {
       return;
     }
-    unawaited(backup(uid: uid).catchError((Object _, StackTrace __) {}));
+    final alreadyRunning = _backupInFlight != null;
+    final revision = _pendingRevision;
+    final operation = backup(uid: uid);
+    if (alreadyRunning) {
+      return;
+    }
+    unawaited(
+      operation
+          .then((_) {
+            if (_sessionUid != uid) {
+              final activeUid = _sessionUid;
+              if (activeUid != null && _backupPending) {
+                _runPendingBackup(activeUid);
+              }
+              return;
+            }
+            if (revision == _pendingRevision) {
+              _backupPending = false;
+              _automaticBackupSucceeded.add(uid);
+            } else {
+              _backupPending = true;
+              _runPendingBackup(uid);
+            }
+          })
+          .catchError((Object _, StackTrace __) {}),
+    );
   }
 
   Future<String> uploadMedicationPhoto({
@@ -167,6 +221,8 @@ class MedicationSyncService {
         .then((_) {
           _failureCount = 0;
           _retryAfter = null;
+          _retryTimer?.cancel();
+          _retryTimer = null;
         })
         .onError((Object error, StackTrace stackTrace) {
           _recordBackupFailure(error);
@@ -179,6 +235,14 @@ class MedicationSyncService {
         });
     _backupInFlight = operation;
     return operation;
+  }
+
+  Future<void> backupNow({required String uid}) async {
+    final revision = _pendingRevision;
+    await backup(uid: uid);
+    if (revision == _pendingRevision) {
+      _backupPending = false;
+    }
   }
 
   Future<void> _backup(String uid) async {
@@ -204,6 +268,17 @@ class MedicationSyncService {
     _failureCount = (_failureCount + 1).clamp(1, 5);
     final delay = Duration(minutes: 1 << (_failureCount - 1));
     _retryAfter = DateTime.now().add(delay);
+    _retryTimer?.cancel();
+    final uid = _sessionUid;
+    if (uid != null && _backupPending) {
+      _retryTimer = Timer(delay, () {
+        _retryTimer = null;
+        if (_sessionUid == uid && _backupPending) {
+          _retryAfter = null;
+          _runPendingBackup(uid);
+        }
+      });
+    }
     debugPrint(
       'Medication cloud backup deferred for ${delay.inMinutes} minute(s): '
       '$error',

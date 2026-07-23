@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../domain/models/medication.dart';
 import '../../domain/models/medication_report.dart';
@@ -31,9 +32,23 @@ class MedicationRepositoryImpl implements MedicationRepository {
   final MedicationNotificationService _notificationService;
   final Connectivity _connectivity;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
-  Timer? _retryTimer;
-  String? _autoSyncUid;
   bool _hasNetworkConnection = false;
+  Future<void>? _postMutationWork;
+  int _postMutationRevision = 0;
+  int _processedMutationRevision = 0;
+  String? _postMutationUid;
+
+  @override
+  Stream<String> get automaticBackupSucceeded =>
+      _syncService.automaticBackupSucceeded;
+
+  @override
+  Stream<String> get openedReminderPayloads =>
+      _notificationService.openedReminderPayloads;
+
+  @override
+  String? takePendingOpenedReminderPayload() =>
+      _notificationService.takePendingOpenedReminderPayload();
 
   @override
   Future<void> add({
@@ -41,22 +56,20 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required Medication medication,
   }) async {
     await _localDataSource.save(medication);
-    await _refreshReports(uid: uid);
-    await _rescheduleLocalNotifications(uid: uid);
-    _syncService.queueBackup(uid: uid);
+    _queuePostMutationWork(uid);
   }
 
   @override
   Future<void> delete({required String uid, required String id}) async {
     await _localDataSource.delete(id);
-    await _refreshReports(uid: uid);
-    await _rescheduleLocalNotifications(uid: uid);
-    _syncService.queueBackup(uid: uid);
+    _queuePostMutationWork(uid);
   }
 
   @override
   Future<List<Medication>> getAll({required String uid}) async {
-    await _applyPendingNotificationActions(uid);
+    if (await _applyPendingNotificationActions(uid)) {
+      _syncService.queueBackup(uid: uid);
+    }
     return _localDataSource.getAll();
   }
 
@@ -67,9 +80,9 @@ class MedicationRepositoryImpl implements MedicationRepository {
 
   @override
   Future<void> backupToCloud({required String uid}) async {
-    await _refreshReports(uid: uid, queueCloudBackup: false);
+    await _refreshReports(uid: uid);
     _syncService.resumeCloudBackups();
-    await _syncService.backup(uid: uid);
+    await _syncService.backupNow(uid: uid);
   }
 
   @override
@@ -89,7 +102,6 @@ class MedicationRepositoryImpl implements MedicationRepository {
       previousReport: previous,
     );
     await _reportLocalDataSource.save(uid: uid, report: report);
-    _syncService.queueBackup(uid: uid);
     return report;
   }
 
@@ -99,47 +111,36 @@ class MedicationRepositoryImpl implements MedicationRepository {
     required Medication medication,
   }) async {
     await _localDataSource.save(medication);
-    await _refreshReports(uid: uid);
-    await _rescheduleLocalNotifications(uid: uid);
-    _syncService.queueBackup(uid: uid);
+    _queuePostMutationWork(uid);
   }
 
   @override
   Future<void> startAutoSync({required String uid}) async {
     await stopAutoSync();
-    await _applyPendingNotificationActions(uid);
+    final notificationActionChangedState =
+        await _applyPendingNotificationActions(uid);
     _syncService.startSession(uid);
-    await _refreshReports(uid: uid, queueCloudBackup: false);
+    if (notificationActionChangedState) {
+      _syncService.queueBackup(uid: uid);
+    }
+    await _refreshReports(uid: uid);
     await _rescheduleLocalNotifications(uid: uid);
-    _autoSyncUid = uid;
     _connectivitySubscription = _connectivity.onConnectivityChanged.listen((
       results,
     ) {
       _hasNetworkConnection = _isConnected(results);
       if (_hasNetworkConnection) {
         _syncService.notifyConnectivityRestored();
-        _syncService.queueBackup(uid: uid);
+        _syncService.retryPendingBackup(uid: uid);
       }
     });
-    _retryTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      if (_hasNetworkConnection && _autoSyncUid == uid) {
-        _syncService.queueBackup(uid: uid);
-      }
-    });
-
     final current = await _connectivity.checkConnectivity();
     _hasNetworkConnection = _isConnected(current);
-    if (_hasNetworkConnection) {
-      _syncService.queueBackup(uid: uid);
-    }
   }
 
   @override
   Future<void> stopAutoSync() async {
-    _autoSyncUid = null;
     _hasNetworkConnection = false;
-    _retryTimer?.cancel();
-    _retryTimer = null;
     await _connectivitySubscription?.cancel();
     _connectivitySubscription = null;
   }
@@ -148,28 +149,72 @@ class MedicationRepositoryImpl implements MedicationRepository {
     return results.any((result) => result != ConnectivityResult.none);
   }
 
-  Future<void> _applyPendingNotificationActions(String uid) async {
-    await applyPendingMedicationNotificationActions(
+  Future<bool> _applyPendingNotificationActions(String uid) {
+    return applyPendingMedicationNotificationActions(
       uid: uid,
       localDataSource: _localDataSource,
       reportLocalDataSource: _reportLocalDataSource,
     );
   }
 
+  void _queuePostMutationWork(String uid) {
+    _postMutationUid = uid;
+    _postMutationRevision++;
+    if (_postMutationWork != null) {
+      return;
+    }
+    _startPostMutationWork();
+  }
+
+  void _startPostMutationWork() {
+    final operation = _drainPostMutationWork();
+    _postMutationWork = operation;
+    unawaited(
+      operation.whenComplete(() {
+        _postMutationWork = null;
+        if (_processedMutationRevision < _postMutationRevision) {
+          _startPostMutationWork();
+        }
+      }),
+    );
+  }
+
+  Future<void> _drainPostMutationWork() async {
+    while (_processedMutationRevision < _postMutationRevision) {
+      final targetRevision = _postMutationRevision;
+      final uid = _postMutationUid;
+      if (uid == null) {
+        _processedMutationRevision = targetRevision;
+        continue;
+      }
+      try {
+        await _refreshReports(uid: uid);
+        await _rescheduleLocalNotifications(uid: uid);
+      } catch (error, stackTrace) {
+        debugPrint('Medication background maintenance failed: $error');
+        debugPrintStack(stackTrace: stackTrace);
+      }
+      _processedMutationRevision = targetRevision;
+    }
+    final uid = _postMutationUid;
+    if (uid != null) {
+      _syncService.queueBackup(uid: uid);
+    }
+  }
+
   Future<void> _rescheduleLocalNotifications({required String uid}) async {
     final medications = await _localDataSource.getAll();
     try {
       await _notificationService.rescheduleAll(medications, uid: uid);
-    } catch (_) {
+    } catch (error, stackTrace) {
       // The local database is the source of truth. Notification permission or
       // platform failures must never make a successful local save look failed.
+      debugPrint('Medication reminder scheduling failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
   }
 
-  Future<void> _refreshReports({
-    required String uid,
-    bool queueCloudBackup = true,
-  }) async {
+  Future<void> _refreshReports({required String uid}) async {
     final medications = await _localDataSource.getAll();
     for (final rangeDays in medicationReportRanges) {
       final previous = await _reportLocalDataSource.get(
@@ -182,9 +227,6 @@ class MedicationRepositoryImpl implements MedicationRepository {
         previousReport: previous,
       );
       await _reportLocalDataSource.save(uid: uid, report: report);
-      if (queueCloudBackup) {
-        _syncService.queueBackup(uid: uid);
-      }
     }
   }
 }
