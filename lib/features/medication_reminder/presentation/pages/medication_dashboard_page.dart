@@ -1,16 +1,26 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
+import '../../../../core/formatting/app_time_format.dart';
 import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/inline_button_progress.dart';
 import '../../data/services/medication_notification_service.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
 import '../../domain/services/medication_image_data.dart';
 import 'add_reminder_page.dart';
 import 'medication_report_page.dart';
+
+typedef _MedicineReminderItem = ({
+  Medication medication,
+  MedicationDose dose,
+  DateTime scheduledAt,
+});
 
 class MedicationDashboardPage extends StatefulWidget {
   const MedicationDashboardPage({
@@ -34,17 +44,51 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   Timer? _clockTimer;
   DateTime _now = DateTime.now();
   Future<List<Medication>>? _medicationsFuture;
+  List<Medication> _loadedMedications = const <Medication>[];
+  StreamSubscription<String>? _automaticBackupSubscription;
+  StreamSubscription<bool>? _backupProgressSubscription;
+  StreamSubscription<String>? _openedReminderSubscription;
+  OverlayEntry? _foregroundReminderEntry;
+  String? _lastForegroundReminderKey;
+  String? _pendingOpenedReminderPayload;
+  bool _checkedRecentReminderOnLoad = false;
+  bool _manualBackupInProgress = false;
+  bool _backupInProgress = false;
+  bool _signOutInProgress = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _load();
-    _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
-        setState(() => _now = DateTime.now());
+        final now = DateTime.now();
+        setState(() => _now = now);
+        _showForegroundReminderIfDue(now);
       }
     });
+    _automaticBackupSubscription = widget.repository.automaticBackupSucceeded
+        .where((uid) => uid == widget.uid)
+        .listen((_) {
+          if (!mounted || _manualBackupInProgress) {
+            return;
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(context.tr('automatic_backup_complete'))),
+          );
+        });
+    _backupInProgress = widget.repository.isBackupInProgress;
+    _backupProgressSubscription = widget.repository.backupInProgressChanged
+        .listen((inProgress) {
+          if (mounted) {
+            setState(() => _backupInProgress = inProgress);
+          }
+        });
+    _openedReminderSubscription = widget.repository.openedReminderPayloads
+        .listen(_handleOpenedReminderPayload);
+    _pendingOpenedReminderPayload = widget.repository
+        .takePendingOpenedReminderPayload();
     WidgetsBinding.instance.addPostFrameCallback((_) => _startAutoSync());
   }
 
@@ -52,6 +96,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _clockTimer?.cancel();
+    _hideForegroundReminder();
+    unawaited(_automaticBackupSubscription?.cancel());
+    unawaited(_backupProgressSubscription?.cancel());
+    unawaited(_openedReminderSubscription?.cancel());
     unawaited(widget.repository.stopAutoSync());
     super.dispose();
   }
@@ -59,7 +107,8 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && mounted) {
-      setState(_load);
+      unawaited(_startAutoSync());
+      _showForegroundReminderIfDue(DateTime.now(), includeRecent: true);
     }
   }
 
@@ -71,7 +120,230 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   }
 
   void _load() {
+    _checkedRecentReminderOnLoad = false;
     _medicationsFuture = widget.repository.getAll(uid: widget.uid);
+  }
+
+  void _showForegroundReminderIfDue(
+    DateTime now, {
+    bool includeRecent = false,
+  }) {
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    if (!mounted ||
+        (lifecycleState != null &&
+            lifecycleState != AppLifecycleState.resumed)) {
+      return;
+    }
+    final due = <_MedicineReminderItem>[];
+    final seen = <String>{};
+    for (final medication in _loadedMedications.where(
+      (item) => item.isActive && item.occursOnDate(now),
+    )) {
+      for (final dose in medication.effectiveDoses) {
+        final time = _parseDashboardTime(dose.timeOfDay);
+        final scheduledAt = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          time.hour,
+          time.minute,
+        );
+        final elapsed = now.difference(scheduledAt);
+        final isDueNow =
+            elapsed >= Duration.zero && elapsed < const Duration(minutes: 1);
+        final isRecentlyDue =
+            includeRecent &&
+            elapsed >= Duration.zero &&
+            elapsed <= const Duration(minutes: 5);
+        final checkIn = medication.checkInFor(
+          scheduledAt,
+          _canonicalTime(scheduledAt),
+        );
+        if ((isDueNow || isRecentlyDue) && checkIn?.medicineStatus == null) {
+          final key = '${medication.id}|${dose.timeOfDay}';
+          if (seen.add(key)) {
+            due.add((
+              medication: medication,
+              dose: dose,
+              scheduledAt: scheduledAt,
+            ));
+          }
+        }
+      }
+    }
+    if (due.isEmpty) {
+      return;
+    }
+
+    final minuteKey =
+        '${medicationDateKey(now)}|'
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+    if (_lastForegroundReminderKey == minuteKey) {
+      return;
+    }
+    _lastForegroundReminderKey = minuteKey;
+    _showMedicineReminderOverlay(due);
+  }
+
+  void _showMedicineReminderOverlay(List<_MedicineReminderItem> items) {
+    if (!mounted || items.isEmpty) {
+      return;
+    }
+    _hideForegroundReminder();
+    final overlay = Overlay.maybeOf(context, rootOverlay: true);
+    if (overlay == null) {
+      return;
+    }
+    _foregroundReminderEntry = OverlayEntry(
+      builder: (overlayContext) => Stack(
+        children: [
+          Positioned.fill(
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
+              child: ColoredBox(color: Colors.black.withValues(alpha: 0.28)),
+            ),
+          ),
+          Positioned.fill(
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    child: TweenAnimationBuilder<double>(
+                      duration: const Duration(milliseconds: 220),
+                      tween: Tween<double>(begin: 0.94, end: 1),
+                      curve: Curves.easeOutCubic,
+                      builder: (context, value, child) => Transform.scale(
+                        scale: value,
+                        child: Opacity(opacity: value, child: child),
+                      ),
+                      child: _ForegroundMedicineReminderCard(
+                        items: items,
+                        onDismiss: _hideForegroundReminder,
+                        onTaken: () {
+                          _hideForegroundReminder();
+                          unawaited(_recordReminderItems(items, taken: true));
+                        },
+                        onNotTaken: () {
+                          _hideForegroundReminder();
+                          unawaited(_recordReminderItems(items, taken: false));
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    overlay.insert(_foregroundReminderEntry!);
+  }
+
+  void _hideForegroundReminder() {
+    _foregroundReminderEntry?.remove();
+    _foregroundReminderEntry = null;
+  }
+
+  Future<void> _recordReminderItems(
+    List<_MedicineReminderItem> items, {
+    required bool taken,
+  }) async {
+    for (final item in items) {
+      if (taken) {
+        await _recordMedicineTaken(
+          item.medication,
+          item.scheduledAt,
+          takenAt: DateTime.now(),
+          reload: false,
+        );
+      } else {
+        await _recordMedicineNotTaken(
+          item.medication,
+          item.scheduledAt,
+          reload: false,
+        );
+      }
+    }
+    if (mounted) {
+      setState(_load);
+    }
+  }
+
+  void _handleOpenedReminderPayload(String payload) {
+    widget.repository.takePendingOpenedReminderPayload();
+    _pendingOpenedReminderPayload = payload;
+    if (_loadedMedications.isNotEmpty) {
+      _showPendingOpenedReminder();
+    }
+  }
+
+  void _showPendingOpenedReminder() {
+    final payload = _pendingOpenedReminderPayload;
+    if (!mounted || payload == null || _loadedMedications.isEmpty) {
+      return;
+    }
+    _pendingOpenedReminderPayload = null;
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map<String, dynamic>) {
+        return;
+      }
+      final scheduledAt =
+          DateTime.tryParse(decoded['scheduledAt']?.toString() ?? '') ??
+          DateTime.now();
+      final doses = decoded['doses'];
+      if (doses is! List) {
+        return;
+      }
+      final items = <_MedicineReminderItem>[];
+      final seen = <String>{};
+      for (final rawDose in doses) {
+        if (rawDose is! Map) {
+          continue;
+        }
+        final medicationId = rawDose['medicationId']?.toString();
+        final doseTime = rawDose['doseTime']?.toString();
+        Medication? medication;
+        for (final candidate in _loadedMedications) {
+          if (candidate.id == medicationId) {
+            medication = candidate;
+            break;
+          }
+        }
+        if (medication == null || doseTime == null) {
+          continue;
+        }
+        MedicationDose? dose;
+        for (final candidate in medication.effectiveDoses) {
+          if (candidate.timeOfDay == doseTime) {
+            dose = candidate;
+            break;
+          }
+        }
+        if (dose == null || !seen.add('${medication.id}|$doseTime')) {
+          continue;
+        }
+        final clock = _parseDashboardTime(doseTime);
+        items.add((
+          medication: medication,
+          dose: dose,
+          scheduledAt: DateTime(
+            scheduledAt.year,
+            scheduledAt.month,
+            scheduledAt.day,
+            clock.hour,
+            clock.minute,
+          ),
+        ));
+      }
+      _showMedicineReminderOverlay(items);
+    } catch (_) {
+      return;
+    }
   }
 
   Future<void> _refresh() async {
@@ -82,6 +354,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   }
 
   Future<void> _backup() async {
+    if (_manualBackupInProgress || _backupInProgress) {
+      return;
+    }
+    setState(() => _manualBackupInProgress = true);
     try {
       await widget.repository.backupToCloud(uid: widget.uid);
       if (mounted) {
@@ -96,6 +372,24 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
           context,
         ).showSnackBar(SnackBar(content: Text(context.tr('backup_waiting'))));
       }
+    } finally {
+      if (mounted) {
+        setState(() => _manualBackupInProgress = false);
+      }
+    }
+  }
+
+  Future<void> _signOut() async {
+    if (_signOutInProgress) {
+      return;
+    }
+    setState(() => _signOutInProgress = true);
+    try {
+      await widget.onSignOut();
+    } finally {
+      if (mounted) {
+        setState(() => _signOutInProgress = false);
+      }
     }
   }
 
@@ -107,8 +401,9 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   Future<void> _saveCheckIn(
     Medication medication,
     DateTime scheduledTime,
-    MedicationCheckIn Function(MedicationCheckIn current) update,
-  ) async {
+    MedicationCheckIn Function(MedicationCheckIn current) update, {
+    bool reload = true,
+  }) async {
     final doseTime = _canonicalTime(scheduledTime);
     final current =
         medication.checkInFor(scheduledTime, doseTime) ??
@@ -129,7 +424,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
         updatedAt: DateTime.now(),
       ),
     );
-    if (mounted) {
+    if (mounted && reload) {
       setState(_load);
     }
   }
@@ -138,7 +433,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
     Medication medication,
     DateTime scheduledTime, {
     required DateTime takenAt,
-    required bool withMeal,
+    bool reload = true,
   }) {
     return _saveCheckIn(
       medication,
@@ -147,18 +442,20 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
         dateKey: current.dateKey,
         doseTime: current.doseTime,
         medicineStatus: 'taken',
-        mealStatus: withMeal ? 'taken' : current.mealStatus,
+        mealStatus: current.mealStatus,
         medicineTakenAt: takenAt,
-        mealTakenAt: withMeal ? takenAt : current.mealTakenAt,
-        takenWithMeal: withMeal,
+        mealTakenAt: current.mealTakenAt,
+        takenWithMeal: current.takenWithMeal,
       ),
+      reload: reload,
     );
   }
 
   Future<void> _recordMedicineNotTaken(
     Medication medication,
-    DateTime scheduledTime,
-  ) {
+    DateTime scheduledTime, {
+    bool reload = true,
+  }) {
     return _saveCheckIn(
       medication,
       scheduledTime,
@@ -169,27 +466,49 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
         mealStatus: current.mealStatus,
         mealTakenAt: current.mealTakenAt,
       ),
+      reload: reload,
     );
   }
 
-  Future<void> _recordMealStatus(
+  Future<void> _editConsumptionRecord(
     Medication medication,
-    DateTime scheduledTime, {
-    required bool taken,
-  }) {
-    return _saveCheckIn(
-      medication,
-      scheduledTime,
-      (current) => MedicationCheckIn(
-        dateKey: current.dateKey,
-        doseTime: current.doseTime,
-        medicineStatus: current.medicineStatus,
-        mealStatus: taken ? 'taken' : 'notTaken',
-        medicineTakenAt: current.medicineTakenAt,
-        mealTakenAt: taken ? DateTime.now() : null,
-        takenWithMeal: taken && current.takenWithMeal,
+    DateTime scheduledTime,
+  ) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.medication_outlined),
+                title: Text(context.tr('mark_taken')),
+                onTap: () => Navigator.pop(sheetContext, 'medicineTaken'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.medication_outlined),
+                title: Text(context.tr('mark_not_taken')),
+                onTap: () => Navigator.pop(sheetContext, 'medicineNotTaken'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
+    if (!mounted || action == null) {
+      return;
+    }
+    switch (action) {
+      case 'medicineTaken':
+        await _chooseTakenStatus(medication, scheduledTime);
+        break;
+      case 'medicineNotTaken':
+        await _recordMedicineNotTaken(medication, scheduledTime);
+        break;
+    }
   }
 
   Future<void> _chooseTakenStatus(
@@ -218,13 +537,6 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                 icon: const Icon(Icons.check_circle_outline),
                 label: Text(context.tr('taken_now')),
               ),
-              const SizedBox(height: 10),
-              FilledButton.tonalIcon(
-                onPressed: () => Navigator.pop(context, 'withMeal'),
-                icon: const Icon(Icons.restaurant_outlined),
-                label: Text(context.tr('taken_with_food')),
-              ),
-              const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: () => Navigator.pop(context, 'later'),
                 icon: const Icon(Icons.schedule),
@@ -238,12 +550,11 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
     if (!mounted || choice == null) {
       return;
     }
-    if (choice == 'now' || choice == 'withMeal') {
+    if (choice == 'now') {
       await _recordMedicineTaken(
         medication,
         scheduledTime,
         takenAt: DateTime.now(),
-        withMeal: choice == 'withMeal',
       );
       return;
     }
@@ -252,31 +563,9 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
       context: context,
       initialTime: TimeOfDay.now(),
       helpText: context.tr('choose_actual_time'),
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: false),
-        child: child!,
-      ),
+      builder: buildEnglish12HourTimePicker,
     );
     if (!mounted || picked == null) {
-      return;
-    }
-    final withMeal = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(context.tr('also_with_food')),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text(context.tr('without_food')),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: Text(context.tr('taken_with_food')),
-          ),
-        ],
-      ),
-    );
-    if (withMeal == null) {
       return;
     }
     final today = DateTime.now();
@@ -290,7 +579,6 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
         picked.hour,
         picked.minute,
       ),
-      withMeal: withMeal,
     );
   }
 
@@ -375,10 +663,13 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
     if (scheduledAt == null) {
       return context.tr('no_active_medicines');
     }
-    final diff = scheduledAt.difference(_now);
-    final hours = diff.inHours;
-    final minutes = diff.inMinutes.remainder(60);
-    return '${hours.toString().padLeft(2, '0')}h ${minutes.toString().padLeft(2, '0')}m';
+    final totalSeconds = math.max(0, scheduledAt.difference(_now).inSeconds);
+    final hours = totalSeconds ~/ Duration.secondsPerHour;
+    final minutes = (totalSeconds ~/ Duration.secondsPerMinute) % 60;
+    final seconds = totalSeconds % 60;
+    return '${hours.toString().padLeft(2, '0')}h '
+        '${minutes.toString().padLeft(2, '0')}m '
+        '${seconds.toString().padLeft(2, '0')}s';
   }
 
   @override
@@ -390,6 +681,25 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
           future: _medicationsFuture,
           builder: (context, snapshot) {
             final medications = snapshot.data ?? const <Medication>[];
+            if (snapshot.hasData) {
+              _loadedMedications = medications;
+              if (_pendingOpenedReminderPayload != null ||
+                  !_checkedRecentReminderOnLoad) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (!mounted) {
+                    return;
+                  }
+                  _showPendingOpenedReminder();
+                  if (!_checkedRecentReminderOnLoad) {
+                    _checkedRecentReminderOnLoad = true;
+                    _showForegroundReminderIfDue(
+                      DateTime.now(),
+                      includeRecent: true,
+                    );
+                  }
+                });
+              }
+            }
             final todayMedications = medications
                 .where((medication) => medication.occursOnDate(_now))
                 .toList(growable: false);
@@ -397,14 +707,7 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
               medications,
               from: _now,
               horizonDays: 366,
-              maxEvents: 4,
-            );
-            final startOfToday = DateTime(_now.year, _now.month, _now.day);
-            final todayEvents = buildMedicationReminderPlan(
-              medications,
-              from: startOfToday.subtract(const Duration(milliseconds: 1)),
-              horizonDays: 0,
-              maxEvents: 360,
+              maxEvents: 3,
             );
             final nextEvent = upcomingEvents.isEmpty
                 ? null
@@ -422,7 +725,10 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                     elevation: 0,
                     title: const Text(
                       'MediMind',
-                      style: TextStyle(fontWeight: FontWeight.w800),
+                      style: TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                     actions: [
                       IconButton(
@@ -436,8 +742,16 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                       ),
                       IconButton(
                         tooltip: context.tr('sign_out'),
-                        onPressed: widget.onSignOut,
-                        icon: const Icon(Icons.logout_outlined),
+                        onPressed: _signOutInProgress ? null : _signOut,
+                        icon: _signOutInProgress
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2.4,
+                                ),
+                              )
+                            : const Icon(Icons.logout_outlined),
                       ),
                     ],
                   ),
@@ -446,7 +760,6 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                     sliver: SliverToBoxAdapter(
                       child: _HeroHeader(
                         upcomingEvents: upcomingEvents,
-                        todayEvents: todayEvents,
                         countdownText: _formatCountdown(nextEvent?.scheduledAt),
                         now: _now,
                       ),
@@ -467,11 +780,6 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                             value: '${medications.length}',
                             icon: Icons.notifications_active_outlined,
                           ),
-                          _MetricCard(
-                            title: context.tr('dashboard_next_in'),
-                            value: _formatCountdown(nextEvent?.scheduledAt),
-                            icon: Icons.schedule_outlined,
-                          ),
                         ],
                       ),
                     ),
@@ -482,9 +790,14 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                       sliver: SliverToBoxAdapter(
                         child: _ActionButtons(
                           primaryLabel: context.tr('add_medicine'),
-                          secondaryLabel: context.tr('backup'),
+                          secondaryLabel:
+                              _manualBackupInProgress || _backupInProgress
+                              ? context.tr('backing_up')
+                              : context.tr('backup'),
                           onPrimary: _openAddPage,
                           onSecondary: _backup,
+                          secondaryBusy:
+                              _manualBackupInProgress || _backupInProgress,
                         ),
                       ),
                     ),
@@ -529,22 +842,14 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                           return _MedicineCard(
                             medication: medication,
                             nextTime: nextTime,
+                            trackingTime: trackingTime,
+                            now: _now,
                             checkIn: checkIn,
                             onMedicineTaken: () =>
                                 _chooseTakenStatus(medication, trackingTime),
                             onMedicineNotTaken: () => _recordMedicineNotTaken(
                               medication,
                               trackingTime,
-                            ),
-                            onMealTaken: () => _recordMealStatus(
-                              medication,
-                              trackingTime,
-                              taken: true,
-                            ),
-                            onMealNotTaken: () => _recordMealStatus(
-                              medication,
-                              trackingTime,
-                              taken: false,
                             ),
                             onTap: () => _showMedicationSheet(medication),
                           );
@@ -598,9 +903,8 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
               ),
               _DetailLine(
                 label: context.tr('time'),
-                value: MaterialLocalizations.of(context).formatTimeOfDay(
+                value: formatEnglish12Hour(
                   _parseDashboardTime(medication.timeOfDay),
-                  alwaysUse24HourFormat: false,
                 ),
               ),
               _DetailLine(
@@ -623,6 +927,18 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                   value: medication.notes!,
                 ),
               const SizedBox(height: 18),
+              OutlinedButton.icon(
+                onPressed: () async {
+                  Navigator.pop(context);
+                  await _editConsumptionRecord(
+                    medication,
+                    _trackingTime(medication),
+                  );
+                },
+                icon: const Icon(Icons.fact_check_outlined),
+                label: Text(context.tr('edit_consumption_record')),
+              ),
+              const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
@@ -672,26 +988,211 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
   }
 }
 
+class _ForegroundMedicineReminderCard extends StatelessWidget {
+  const _ForegroundMedicineReminderCard({
+    required this.items,
+    required this.onDismiss,
+    required this.onTaken,
+    required this.onNotTaken,
+  });
+
+  final List<_MedicineReminderItem> items;
+  final VoidCallback onDismiss;
+  final VoidCallback onTaken;
+  final VoidCallback onNotTaken;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      key: const ValueKey('foreground-medicine-reminder'),
+      color: Colors.white,
+      elevation: 14,
+      shadowColor: AppPalette.aubergine.withValues(alpha: 0.3),
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: AppPalette.plum.withValues(alpha: 0.18)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: const BoxDecoration(
+                    color: AppPalette.aubergine,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.medication_rounded,
+                    color: Colors.white,
+                    size: 21,
+                  ),
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Text(
+                    context.tr('reminder_medicine_title'),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: MaterialLocalizations.of(context).closeButtonTooltip,
+                  onPressed: onDismiss,
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 49, right: 8),
+              child: Text(
+                context.tr('reminder_medicine_message'),
+                style: const TextStyle(
+                  color: AppPalette.muted,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: math.min(280, items.length * 62).toDouble(),
+              ),
+              child: ListView.separated(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: items.length,
+                separatorBuilder: (context, index) => Divider(
+                  height: 1,
+                  color: AppPalette.plum.withValues(alpha: 0.12),
+                ),
+                itemBuilder: (context, index) =>
+                    _ForegroundMedicineRow(item: items[index]),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onNotTaken,
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: Text(
+                      context.tr('mark_not_taken'),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onTaken,
+                    icon: const Icon(Icons.check_circle_outline),
+                    label: Text(
+                      context.tr('mark_taken'),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ForegroundMedicineRow extends StatelessWidget {
+  const _ForegroundMedicineRow({required this.item});
+
+  final _MedicineReminderItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = item.dose.dosageValue.trim();
+    final unit = switch (item.dose.dosageUnit) {
+      'ml' => context.tr('ml'),
+      'drop' => context.tr('drop_unit'),
+      'unit' => context.tr('units'),
+      _ => context.tr('pill'),
+    };
+    final details = <String>[
+      if (value.isNotEmpty) '$value $unit',
+      formatEnglish12Hour(_parseDashboardTime(item.dose.timeOfDay)),
+    ];
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
+      child: Row(
+        children: [
+          const Icon(Icons.circle, size: 9, color: AppPalette.persimmon),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  item.medication.medicineName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  details.join(' • '),
+                  style: const TextStyle(
+                    color: AppPalette.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _HeroHeader extends StatelessWidget {
   const _HeroHeader({
     required this.upcomingEvents,
-    required this.todayEvents,
     required this.countdownText,
     required this.now,
   });
 
   final List<MedicationReminderPlanItem> upcomingEvents;
-  final List<MedicationReminderPlanItem> todayEvents;
   final String countdownText;
   final DateTime now;
 
   @override
   Widget build(BuildContext context) {
     final nextEvent = upcomingEvents.isEmpty ? null : upcomingEvents.first;
-    final dayFraction = (now.hour * 60 + now.minute) / Duration.minutesPerDay;
+    final arcEndEvent = _arcEndEvent(upcomingEvents, now);
+    final arcEnd = arcEndEvent?.scheduledAt;
+    final arcDuration = arcEnd?.difference(now);
+    final arcEventFractions = arcEnd == null || arcDuration == null
+        ? const <double>[]
+        : upcomingEvents
+              .where((event) => !event.scheduledAt.isAfter(arcEnd))
+              .map((event) {
+                if (arcDuration.inMilliseconds <= 0) {
+                  return 1.0;
+                }
+                return event.scheduledAt.difference(now).inMilliseconds /
+                    arcDuration.inMilliseconds;
+              })
+              .toList(growable: false);
     final headlineDate = nextEvent?.scheduledAt ?? now;
     final weekday = _localizedWeekday(context, headlineDate);
-    final date = _localizedOrdinalDate(context, headlineDate);
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
       decoration: BoxDecoration(
@@ -737,15 +1238,9 @@ class _HeroHeader extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 4),
-                          Text(
-                            date,
+                          _OrdinalDateText(
+                            date: headlineDate,
                             key: const ValueKey('hero-date'),
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                              height: 1.3,
-                            ),
                           ),
                         ],
                       ),
@@ -765,23 +1260,20 @@ class _HeroHeader extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           SizedBox(
-            height: 174,
+            height: 198,
             child: Stack(
               children: [
                 Positioned.fill(
                   child: CustomPaint(
                     painter: _DayCyclePainter(
-                      progress: dayFraction,
-                      eventFractions: todayEvents
-                          .map(_eventDayFraction)
-                          .toList(growable: false),
+                      eventFractions: arcEventFractions,
                     ),
                   ),
                 ),
                 Positioned(
                   left: 40,
                   right: 40,
-                  top: 72,
+                  top: nextEvent == null ? 88 : 74,
                   child: Column(
                     children: [
                       Text(
@@ -789,28 +1281,28 @@ class _HeroHeader extends StatelessWidget {
                             ? context.tr('no_active_medicines')
                             : _eventLabel(context, nextEvent),
                         key: const ValueKey('hero-current-event'),
-                        maxLines: 1,
+                        maxLines: nextEvent == null ? 2 : 1,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: Colors.white,
-                          fontSize: 18,
+                          fontSize: nextEvent == null ? 16 : 18,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
-                      const SizedBox(height: 3),
-                      Text(
-                        nextEvent == null
-                            ? context.tr('create_first_reminder_hint')
-                            : '${context.tr('due_in')} $countdownText',
-                        maxLines: 2,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: Colors.white70,
-                          fontSize: 13,
-                          height: 1.25,
+                      if (nextEvent != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          '${context.tr('due_in')} $countdownText',
+                          maxLines: 2,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            height: 1.25,
+                          ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ),
@@ -818,7 +1310,7 @@ class _HeroHeader extends StatelessWidget {
                   left: 4,
                   bottom: 0,
                   child: Text(
-                    _eventTime(context, now),
+                    formatEnglish12HourDateTime(now),
                     key: const ValueKey('hero-now-time'),
                     style: const TextStyle(
                       color: Colors.white,
@@ -828,12 +1320,12 @@ class _HeroHeader extends StatelessWidget {
                     ),
                   ),
                 ),
-                const Positioned(
+                Positioned(
                   right: 4,
                   bottom: 0,
                   child: Text(
-                    '11:59 PM',
-                    style: TextStyle(
+                    arcEnd == null ? '--' : _eventTime(context, arcEnd),
+                    style: const TextStyle(
                       color: Colors.white70,
                       fontFamily: 'Manrope',
                       fontSize: 12,
@@ -871,6 +1363,7 @@ class _UpcomingEventRail extends StatelessWidget {
       children: List.generate(
         events.length,
         (index) => Expanded(
+          key: ValueKey('upcoming-event-$index'),
           child: _UpcomingEventRailItem(
             event: events[index],
             now: now,
@@ -881,6 +1374,21 @@ class _UpcomingEventRail extends StatelessWidget {
       ),
     );
   }
+}
+
+MedicationReminderPlanItem? _arcEndEvent(
+  List<MedicationReminderPlanItem> events,
+  DateTime now,
+) {
+  if (events.isEmpty) {
+    return null;
+  }
+  final first = events.first;
+  if (events.length > 1 &&
+      first.scheduledAt.difference(now) <= const Duration(minutes: 5)) {
+    return events[1];
+  }
+  return first;
 }
 
 class _UpcomingEventRailItem extends StatelessWidget {
@@ -960,19 +1468,15 @@ class _UpcomingEventRailItem extends StatelessWidget {
 }
 
 class _DayCyclePainter extends CustomPainter {
-  const _DayCyclePainter({
-    required this.progress,
-    required this.eventFractions,
-  });
+  const _DayCyclePainter({required this.eventFractions});
 
-  final double progress;
   final List<double> eventFractions;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final diameter = math.min(size.width - 32, (size.height - 20) * 2);
+    final diameter = math.min(size.width - 32, (size.height - 58) * 2);
     final rect = Rect.fromCenter(
-      center: Offset(size.width / 2, size.height - 12),
+      center: Offset(size.width / 2, size.height - 34),
       width: diameter,
       height: diameter,
     );
@@ -992,21 +1496,11 @@ class _DayCyclePainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     canvas.drawArc(rect, math.pi, math.pi, false, basePaint);
-    final safeProgress = progress.clamp(0.0, 1.0);
-    if (safeProgress > 0) {
-      canvas.drawArc(
-        rect,
-        math.pi,
-        math.pi * safeProgress,
-        false,
-        progressPaint,
-      );
-    }
+    canvas.drawArc(rect, math.pi, math.pi, false, progressPaint);
 
     for (final fraction in eventFractions.toSet()) {
       final safeFraction = fraction.clamp(0.0, 1.0);
       final point = _pointOnDayArc(rect, safeFraction);
-      final hasPassed = safeFraction <= safeProgress;
       canvas.drawCircle(
         point,
         6,
@@ -1017,14 +1511,11 @@ class _DayCyclePainter extends CustomPainter {
       canvas.drawCircle(
         point,
         3.5,
-        Paint()
-          ..color = hasPassed
-              ? AppPalette.persimmon
-              : AppPalette.aubergine.withValues(alpha: 0.72),
+        Paint()..color = AppPalette.aubergine.withValues(alpha: 0.72),
       );
     }
 
-    final currentPoint = _pointOnDayArc(rect, safeProgress);
+    final currentPoint = _pointOnDayArc(rect, 0);
     canvas.drawCircle(currentPoint, 8, Paint()..color = Colors.white);
     canvas.drawCircle(currentPoint, 4.25, Paint()..color = AppPalette.saffron);
   }
@@ -1039,8 +1530,7 @@ class _DayCyclePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DayCyclePainter oldDelegate) {
-    if (oldDelegate.progress != progress ||
-        oldDelegate.eventFractions.length != eventFractions.length) {
+    if (oldDelegate.eventFractions.length != eventFractions.length) {
       return true;
     }
     for (var index = 0; index < eventFractions.length; index++) {
@@ -1061,14 +1551,29 @@ class _Metrics extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columns = constraints.maxWidth < 500 ? 2 : 3;
-        final width = (constraints.maxWidth - (columns - 1) * 12) / columns;
-        return Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: cards
-              .map((card) => SizedBox(width: width, child: card))
-              .toList(growable: false),
+        if (constraints.maxWidth < 500 && cards.length == 3) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(child: cards[0]),
+                  const SizedBox(width: 12),
+                  Expanded(child: cards[1]),
+                ],
+              ),
+              const SizedBox(height: 12),
+              cards[2],
+            ],
+          );
+        }
+        return Row(
+          children: [
+            for (var index = 0; index < cards.length; index++) ...[
+              if (index > 0) const SizedBox(width: 12),
+              Expanded(child: cards[index]),
+            ],
+          ],
         );
       },
     );
@@ -1081,48 +1586,42 @@ class _ActionButtons extends StatelessWidget {
     required this.secondaryLabel,
     required this.onPrimary,
     required this.onSecondary,
+    required this.secondaryBusy,
   });
 
   final String primaryLabel;
   final String secondaryLabel;
   final VoidCallback onPrimary;
   final VoidCallback onSecondary;
+  final bool secondaryBusy;
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final stack = constraints.maxWidth < 430;
-        final primary = FilledButton.icon(
-          onPressed: onPrimary,
-          icon: const Icon(Icons.add),
-          label: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text(primaryLabel, textAlign: TextAlign.center),
-          ),
-        );
-        final secondary = OutlinedButton.icon(
-          onPressed: onSecondary,
+    final primary = FilledButton.icon(
+      onPressed: onPrimary,
+      icon: const Icon(Icons.add),
+      label: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        child: Text(primaryLabel, textAlign: TextAlign.center),
+      ),
+    );
+    final secondary = OutlinedButton(
+      onPressed: secondaryBusy ? null : onSecondary,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 11),
+        child: InlineButtonProgress(
+          label: secondaryLabel,
+          inProgress: secondaryBusy,
           icon: const Icon(Icons.cloud_upload_outlined),
-          label: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Text(secondaryLabel, textAlign: TextAlign.center),
-          ),
-        );
-        if (stack) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [primary, const SizedBox(height: 10), secondary],
-          );
-        }
-        return Row(
-          children: [
-            Expanded(child: primary),
-            const SizedBox(width: 12),
-            Expanded(child: secondary),
-          ],
-        );
-      },
+        ),
+      ),
+    );
+    return Row(
+      children: [
+        Expanded(child: primary),
+        const SizedBox(width: 10),
+        Expanded(child: secondary),
+      ],
     );
   }
 }
@@ -1148,18 +1647,33 @@ class _MetricCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, color: AppPalette.persimmon),
-            const SizedBox(height: 12),
-            Text(
-              value,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 4),
-            Text(title, style: const TextStyle(color: AppPalette.muted)),
-          ],
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 104),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Icon(icon, color: AppPalette.persimmon),
+              const SizedBox(height: 10),
+              Text(
+                value,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppPalette.muted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1282,29 +1796,31 @@ class _MedicineCard extends StatelessWidget {
   const _MedicineCard({
     required this.medication,
     required this.nextTime,
+    required this.trackingTime,
+    required this.now,
     required this.checkIn,
     required this.onMedicineTaken,
     required this.onMedicineNotTaken,
-    required this.onMealTaken,
-    required this.onMealNotTaken,
     required this.onTap,
   });
 
   final Medication medication;
   final DateTime nextTime;
+  final DateTime trackingTime;
+  final DateTime now;
   final MedicationCheckIn? checkIn;
   final VoidCallback onMedicineTaken;
   final VoidCallback onMedicineNotTaken;
-  final VoidCallback onMealTaken;
-  final VoidCallback onMealNotTaken;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final nextLabel = MaterialLocalizations.of(context).formatTimeOfDay(
-      TimeOfDay.fromDateTime(nextTime),
-      alwaysUse24HourFormat: false,
+    final medicineRecorded = checkIn?.medicineStatus != null;
+    final medicineActionAvailable = !now.isBefore(
+      trackingTime.subtract(const Duration(minutes: 5)),
     );
+    final showMedicineActions = !medicineRecorded && medicineActionAvailable;
+    final nextLabel = formatEnglish12HourDateTime(nextTime);
     return Card(
       elevation: 0,
       color: Colors.white,
@@ -1457,25 +1973,15 @@ class _MedicineCard extends StatelessWidget {
                     ),
                 ],
               ),
-              const SizedBox(height: 14),
-              _StatusActions(
-                title: context.tr('medicine_status'),
-                status: checkIn?.medicineStatus,
-                takenAt: checkIn?.medicineTakenAt,
-                takenWithMeal: checkIn?.takenWithMeal ?? false,
-                onTaken: onMedicineTaken,
-                onNotTaken: onMedicineNotTaken,
-              ),
-              if (medication.mealScheduleEnabled) ...[
-                const SizedBox(height: 10),
+              if (showMedicineActions) const SizedBox(height: 14),
+              if (showMedicineActions)
                 _StatusActions(
-                  title: context.tr('meal_status'),
-                  status: checkIn?.mealStatus,
-                  takenAt: checkIn?.mealTakenAt,
-                  onTaken: onMealTaken,
-                  onNotTaken: onMealNotTaken,
+                  title: context.tr('medicine_status'),
+                  status: checkIn?.medicineStatus,
+                  takenAt: checkIn?.medicineTakenAt,
+                  onTaken: onMedicineTaken,
+                  onNotTaken: onMedicineNotTaken,
                 ),
-              ],
             ],
           ),
         ),
@@ -1560,13 +2066,11 @@ class _StatusActions extends StatelessWidget {
     required this.takenAt,
     required this.onTaken,
     required this.onNotTaken,
-    this.takenWithMeal = false,
   });
 
   final String title;
   final String? status;
   final DateTime? takenAt;
-  final bool takenWithMeal;
   final VoidCallback onTaken;
   final VoidCallback onNotTaken;
 
@@ -1581,7 +2085,7 @@ class _StatusActions extends StatelessWidget {
         : context.tr('status_pending');
     final detail = takenAt == null
         ? statusText
-        : '$statusText • ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(takenAt!), alwaysUse24HourFormat: false)}${takenWithMeal ? ' • ${context.tr('with_food')}' : ''}';
+        : '$statusText • ${formatEnglish12HourDateTime(takenAt!)}';
 
     return Container(
       padding: const EdgeInsets.all(10),
@@ -1717,9 +2221,8 @@ String _localizedDoseSummary(BuildContext context, Medication medication) {
           'unit' => context.tr('units'),
           _ => context.tr('pill'),
         };
-        final displayTime = MaterialLocalizations.of(context).formatTimeOfDay(
+        final displayTime = formatEnglish12Hour(
           _parseDashboardTime(dose.timeOfDay),
-          alwaysUse24HourFormat: false,
         );
         return '$displayTime — ${dose.dosageValue} $unit';
       })
@@ -1727,33 +2230,14 @@ String _localizedDoseSummary(BuildContext context, Medication medication) {
 }
 
 String _eventLabel(BuildContext context, MedicationReminderPlanItem event) {
-  final medicineNames = event.doses
+  return event.doses
       .map((item) => item.medication.medicineName)
       .toSet()
       .join(', ');
-  final mealNames = event.meals
-      .map((item) => item.medication.medicineName)
-      .toSet()
-      .join(', ');
-  if (event.hasMedicine && event.hasMeal) {
-    return '$medicineNames + ${context.tr('meal_event')}';
-  }
-  if (event.hasMedicine) {
-    return medicineNames;
-  }
-  return '${context.tr('meal_event')} — $mealNames';
 }
 
 String _eventTime(BuildContext context, DateTime scheduledAt) {
-  return MaterialLocalizations.of(context).formatTimeOfDay(
-    TimeOfDay.fromDateTime(scheduledAt),
-    alwaysUse24HourFormat: false,
-  );
-}
-
-double _eventDayFraction(MedicationReminderPlanItem event) {
-  final time = event.scheduledAt;
-  return (time.hour * 60 + time.minute) / Duration.minutesPerDay;
+  return formatEnglish12HourDateTime(scheduledAt);
 }
 
 String _localizedWeekday(BuildContext context, DateTime date) {
@@ -1779,50 +2263,92 @@ String _localizedWeekday(BuildContext context, DateTime date) {
   return (isBangla ? bangla : english)[date.weekday - 1];
 }
 
-String _localizedOrdinalDate(BuildContext context, DateTime date) {
-  const englishMonths = <String>[
-    'January',
-    'February',
-    'March',
-    'April',
-    'May',
-    'June',
-    'July',
-    'August',
-    'September',
-    'October',
-    'November',
-    'December',
-  ];
-  const banglaMonths = <String>[
-    'জানুয়ারি',
-    'ফেব্রুয়ারি',
-    'মার্চ',
-    'এপ্রিল',
-    'মে',
-    'জুন',
-    'জুলাই',
-    'আগস্ট',
-    'সেপ্টেম্বর',
-    'অক্টোবর',
-    'নভেম্বর',
-    'ডিসেম্বর',
-  ];
-  final isBangla = AppLanguageScope.controllerOf(context).languageCode == 'bn';
-  if (isBangla) {
-    return '${_toBanglaDigits(date.day)} ${banglaMonths[date.month - 1]}, '
-        '${_toBanglaDigits(date.year)}';
+class _OrdinalDateText extends StatelessWidget {
+  const _OrdinalDateText({super.key, required this.date});
+
+  final DateTime date;
+
+  @override
+  Widget build(BuildContext context) {
+    const style = TextStyle(
+      color: Colors.white70,
+      fontSize: 14,
+      fontWeight: FontWeight.w700,
+      height: 1.3,
+    );
+    final isBangla =
+        AppLanguageScope.controllerOf(context).languageCode == 'bn';
+    if (isBangla) {
+      return Text(
+        '${_toBanglaDigits(date.day)} '
+        '${_banglaMonths[date.month - 1]}, ${_toBanglaDigits(date.year)}',
+        style: style,
+      );
+    }
+
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: '${date.day}'),
+          WidgetSpan(
+            alignment: PlaceholderAlignment.top,
+            child: Transform.translate(
+              offset: const Offset(0, -2),
+              child: Text(
+                _englishOrdinalSuffix(date.day),
+                style: style.copyWith(fontSize: 9, height: 1),
+              ),
+            ),
+          ),
+          TextSpan(text: ' ${_englishMonths[date.month - 1]}, ${date.year}'),
+        ],
+      ),
+      style: style,
+    );
   }
-  final mod100 = date.day % 100;
-  final suffix = mod100 >= 11 && mod100 <= 13
-      ? 'th'
-      : switch (date.day % 10) {
-          1 => 'st',
-          2 => 'nd',
-          3 => 'rd',
-          _ => 'th',
-        };
-  return '${date.day}$suffix ${englishMonths[date.month - 1]}, ${date.year}';
+}
+
+const _englishMonths = <String>[
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+const _banglaMonths = <String>[
+  'জানুয়ারি',
+  'ফেব্রুয়ারি',
+  'মার্চ',
+  'এপ্রিল',
+  'মে',
+  'জুন',
+  'জুলাই',
+  'আগস্ট',
+  'সেপ্টেম্বর',
+  'অক্টোবর',
+  'নভেম্বর',
+  'ডিসেম্বর',
+];
+
+String _englishOrdinalSuffix(int day) {
+  final mod100 = day % 100;
+  if (mod100 >= 11 && mod100 <= 13) {
+    return 'th';
+  }
+  return switch (day % 10) {
+    1 => 'st',
+    2 => 'nd',
+    3 => 'rd',
+    _ => 'th',
+  };
 }
 
 String _toBanglaDigits(Object value) {

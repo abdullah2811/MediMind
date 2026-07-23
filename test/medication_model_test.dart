@@ -129,4 +129,31 @@ void main() {
       isFalse,
     );
   });
+
+  test('custom interval is persisted only for a custom schedule', () {
+    Medication scheduled(String frequency, {int customDays = 2}) => Medication(
+      id: frequency,
+      medicineName: frequency,
+      dose: '1 pill',
+      durationDays: 0,
+      timeOfDay: '09:00',
+      mealOffset: 0,
+      scheduleFrequency: frequency,
+      customIntervalDays: customDays,
+      scheduleStartDate: DateTime(2026, 1, 1),
+      isActive: true,
+      updatedAt: DateTime(2026, 1, 1),
+    );
+
+    final daily = scheduled('daily').toFirestore(uid: 'test-user');
+    expect(daily['scheduleFrequency'], 'daily');
+    expect(daily['customIntervalDays'], isNot(isA<num>()));
+
+    final custom = scheduled(
+      'custom',
+      customDays: 4,
+    ).toFirestore(uid: 'test-user');
+    expect(custom['scheduleFrequency'], 'custom');
+    expect(custom['customIntervalDays'], 4);
+  });
 }

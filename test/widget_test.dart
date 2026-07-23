@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:medimind/app.dart';
 import 'package:medimind/core/localization/app_localization.dart';
+import 'package:medimind/core/localization/app_language_preference_store.dart';
 import 'package:medimind/features/auth/domain/app_user.dart';
 import 'package:medimind/features/auth/domain/auth_repository.dart';
 import 'package:medimind/features/auth/data/session_activity_store.dart';
@@ -12,6 +13,21 @@ import 'package:medimind/features/medication_reminder/domain/repositories/medica
 import 'package:medimind/features/medication_reminder/domain/services/medication_report_builder.dart';
 
 class FakeMedicationRepository implements MedicationRepository {
+  @override
+  Stream<String> get automaticBackupSucceeded => const Stream<String>.empty();
+
+  @override
+  Stream<bool> get backupInProgressChanged => const Stream<bool>.empty();
+
+  @override
+  bool get isBackupInProgress => false;
+
+  @override
+  Stream<String> get openedReminderPayloads => const Stream<String>.empty();
+
+  @override
+  String? takePendingOpenedReminderPayload() => null;
+
   FakeMedicationRepository({this.medications = const <Medication>[]});
 
   final List<Medication> medications;
@@ -57,6 +73,24 @@ class FakeMedicationRepository implements MedicationRepository {
     required Medication medication,
   }) async {
     lastUpdated = medication;
+    final index = medications.indexWhere((item) => item.id == medication.id);
+    if (index >= 0) {
+      medications[index] = medication;
+    }
+  }
+}
+
+class FakeLanguagePreferenceStore implements AppLanguagePreferenceStore {
+  FakeLanguagePreferenceStore(this.languageCode);
+
+  String? languageCode;
+
+  @override
+  Future<String?> read(String uid) async => languageCode;
+
+  @override
+  Future<void> write(String uid, String languageCode) async {
+    this.languageCode = languageCode;
   }
 }
 
@@ -169,12 +203,45 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(
+      find.text('আজকের ওষুধ'),
+      220,
+      scrollable: find.byType(Scrollable).first,
+    );
     expect(find.text('আজকের ওষুধ'), findsOneWidget);
     expect(find.text('ঢাকা, বাংলাদেশ'), findsNothing);
     expect(find.text('ব্যাকআপ নিন'), findsNothing);
     await tester.drag(find.byType(CustomScrollView), const Offset(0, -700));
     await tester.pumpAndSettle();
     expect(find.text('ওষুধ যোগ করুন'), findsOneWidget);
+  });
+
+  testWidgets('dashboard header has no overflow on a narrow phone', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(360, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: FakeMedicationRepository(),
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'narrow-user', displayName: 'Narrow User'),
+        ),
+        sessionActivityStore: FakeSessionActivityStore(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('hero-now-time')), findsOneWidget);
+    final currentTime = tester.widget<Text>(
+      find.byKey(const ValueKey('hero-now-time')),
+    );
+    expect(
+      currentTime.data,
+      matches(RegExp(r'^(?:1[0-2]|[1-9]):[0-5]\d (?:AM|PM)$')),
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('language can be changed to English from the login screen', (
@@ -296,18 +363,7 @@ void main() {
     );
     await tester.drag(find.byType(ListView), const Offset(0, -500));
     await tester.pumpAndSettle();
-    expect(find.text('খাবারের সময়ও মনে করিয়ে দিন'), findsOneWidget);
-    await tester.tap(find.byType(SwitchListTile));
-    await tester.pumpAndSettle();
-    expect(find.text('খাবারের আগে'), findsOneWidget);
-    expect(
-      tester
-          .widgetList<TextField>(find.byType(TextField))
-          .any((field) => field.controller?.text == '20'),
-      isTrue,
-    );
-    await tester.drag(find.byType(ListView), const Offset(0, -500));
-    await tester.pumpAndSettle();
+    expect(find.text('খাবারের সময়ও মনে করিয়ে দিন'), findsNothing);
     expect(find.text('ওষুধের ছবি'), findsOneWidget);
     expect(find.byIcon(Icons.logout_outlined), findsNothing);
     expect(find.byType(LanguageToggleButton), findsOneWidget);
@@ -326,21 +382,26 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    final now = DateTime.now();
+    final dueSoon = now.add(const Duration(minutes: 4));
+    final dueNow =
+        '${dueSoon.hour.toString().padLeft(2, '0')}:'
+        '${dueSoon.minute.toString().padLeft(2, '0')}';
     final repository = FakeMedicationRepository(
       medications: [
         Medication(
           id: 'status-test',
           medicineName: 'Napa',
           dose: '1 pill',
-          doses: const [
+          doses: [
             MedicationDose(
-              timeOfDay: '23:59',
+              timeOfDay: dueNow,
               dosageValue: '1',
               dosageUnit: 'pill',
             ),
           ],
           durationDays: 0,
-          timeOfDay: '23:59',
+          timeOfDay: dueNow,
           mealOffset: -20,
           isActive: true,
           updatedAt: DateTime.now(),
@@ -371,6 +432,103 @@ void main() {
     expect(repository.lastUpdated, isNotNull);
     expect(repository.lastUpdated!.checkIns.single.medicineStatus, 'taken');
     expect(repository.lastUpdated!.checkIns.single.medicineTakenAt, isNotNull);
+    expect(find.text('Taken'), findsNothing);
+    expect(find.text('Not taken'), findsNothing);
+  });
+
+  testWidgets('foreground reminder groups medicines due at the same time', (
+    WidgetTester tester,
+  ) async {
+    tester.view.physicalSize = const Size(420, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final now = DateTime.now();
+    final dueNow =
+        '${now.hour.toString().padLeft(2, '0')}:'
+        '${now.minute.toString().padLeft(2, '0')}';
+
+    Medication dueMedication(String id, String name, String dosage) {
+      return Medication(
+        id: id,
+        medicineName: name,
+        dose: dosage,
+        doses: [
+          MedicationDose(
+            timeOfDay: dueNow,
+            dosageValue: dosage,
+            dosageUnit: 'pill',
+          ),
+        ],
+        durationDays: 0,
+        timeOfDay: dueNow,
+        mealOffset: 0,
+        isActive: true,
+        updatedAt: now,
+      );
+    }
+
+    final repository = FakeMedicationRepository(
+      medications: [
+        dueMedication('first', 'Napa', '1'),
+        dueMedication('second', 'Ace', '2'),
+      ],
+    );
+    await tester.pumpWidget(
+      MediMindApp(
+        repository: repository,
+        authRepository: FakeAuthRepository(
+          const AppUser(uid: 'toast-user', displayName: 'Toast User'),
+        ),
+        sessionActivityStore: FakeSessionActivityStore(),
+        languagePreferenceStore: FakeLanguagePreferenceStore('en'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1));
+
+    final reminder = find.byKey(const ValueKey('foreground-medicine-reminder'));
+    expect(reminder, findsOneWidget);
+    expect(
+      find.descendant(of: reminder, matching: find.text('Reminder: Medicine')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: reminder,
+        matching: find.text('Log your data and take your medicine.'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: reminder, matching: find.text('Napa')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: reminder, matching: find.text('Ace')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: reminder, matching: find.text('Taken')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: reminder, matching: find.text('Not taken')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.descendant(of: reminder, matching: find.text('Taken')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      repository.medications.every(
+        (medicine) => medicine.checkIns.single.medicineStatus == 'taken',
+      ),
+      isTrue,
+    );
+    expect(reminder, findsNothing);
   });
 
   testWidgets('dashboard shows ordered events and opens a ranged report', (
@@ -433,6 +591,18 @@ void main() {
 
     await tester.tap(find.text('Eng'));
     await tester.pumpAndSettle();
+    final foregroundReminder = find.byKey(
+      const ValueKey('foreground-medicine-reminder'),
+    );
+    if (foregroundReminder.evaluate().isNotEmpty) {
+      await tester.tap(
+        find.descendant(
+          of: foregroundReminder,
+          matching: find.byIcon(Icons.close),
+        ),
+      );
+      await tester.pump();
+    }
     await tester.tap(find.byIcon(Icons.assessment_outlined));
     await tester.pumpAndSettle();
 
@@ -440,7 +610,7 @@ void main() {
     expect(find.text('Last 7 days'), findsOneWidget);
     expect(find.text('Report period'), findsOneWidget);
     expect(find.text('Medicines taken'), findsOneWidget);
-    expect(find.text('Meals taken'), findsOneWidget);
+    expect(find.text('Meals taken'), findsNothing);
     expect(find.text('Napa'), findsOneWidget);
 
     await tester.tap(find.text('Last 30 days'));

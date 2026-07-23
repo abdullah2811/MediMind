@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -9,6 +11,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'core/config/firebase_auth_environment.dart';
 import 'core/localization/app_localization.dart';
+import 'core/localization/app_language_preference_store.dart';
 import 'core/theme/app_theme.dart';
 import 'core/theme/app_licenses.dart';
 import 'firebase_options.dart';
@@ -31,11 +34,13 @@ class MediMindApp extends StatefulWidget {
     this.repository,
     this.authRepository,
     this.sessionActivityStore,
+    this.languagePreferenceStore,
   });
 
   final MedicationRepository? repository;
   final AuthRepository? authRepository;
   final SessionActivityStore? sessionActivityStore;
+  final AppLanguagePreferenceStore? languagePreferenceStore;
 
   @override
   State<MediMindApp> createState() => _MediMindAppState();
@@ -50,7 +55,11 @@ class _MediMindAppState extends State<MediMindApp> {
   @override
   void initState() {
     super.initState();
-    _languageController = AppLanguageController();
+    _languageController = AppLanguageController(
+      preferenceStore:
+          widget.languagePreferenceStore ??
+          (widget.repository == null ? HiveAppLanguagePreferenceStore() : null),
+    );
     final notificationService = MedicationNotificationService();
     _medicationRepository =
         widget.repository ?? _buildDefaultRepository(notificationService);
@@ -58,6 +67,15 @@ class _MediMindAppState extends State<MediMindApp> {
         widget.authRepository ?? _buildDefaultAuthRepository();
     _sessionActivityStore =
         widget.sessionActivityStore ?? HiveSessionActivityStore();
+    if (widget.repository == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(
+          notificationService.initialize().catchError((Object error) {
+            debugPrint('Notification setup deferred: $error');
+          }),
+        );
+      });
+    }
   }
 
   @override

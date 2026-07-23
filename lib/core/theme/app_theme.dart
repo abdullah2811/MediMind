@@ -16,6 +16,44 @@ ThemeData buildAppTheme(Locale locale) {
   final fontFamily = locale.languageCode == 'bn'
       ? 'NotoSansBengali'
       : 'Manrope';
+  final baseTextTheme = ThemeData.light().textTheme.apply(
+    fontFamily: fontFamily,
+    bodyColor: AppPalette.ink,
+    displayColor: AppPalette.ink,
+  );
+  final textTheme = baseTextTheme.copyWith(
+    displayLarge: baseTextTheme.displayLarge?.copyWith(
+      fontWeight: FontWeight.w800,
+    ),
+    displayMedium: baseTextTheme.displayMedium?.copyWith(
+      fontWeight: FontWeight.w800,
+    ),
+    displaySmall: baseTextTheme.displaySmall?.copyWith(
+      fontWeight: FontWeight.w800,
+    ),
+    headlineLarge: baseTextTheme.headlineLarge?.copyWith(
+      fontWeight: FontWeight.w800,
+    ),
+    headlineMedium: baseTextTheme.headlineMedium?.copyWith(
+      fontWeight: FontWeight.w800,
+    ),
+    headlineSmall: baseTextTheme.headlineSmall?.copyWith(
+      fontWeight: FontWeight.w800,
+    ),
+    titleLarge: baseTextTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+    titleMedium: baseTextTheme.titleMedium?.copyWith(
+      fontWeight: FontWeight.w800,
+    ),
+    titleSmall: baseTextTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+    bodyLarge: baseTextTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+    bodyMedium: baseTextTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+    bodySmall: baseTextTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
+    labelLarge: baseTextTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+    labelMedium: baseTextTheme.labelMedium?.copyWith(
+      fontWeight: FontWeight.w700,
+    ),
+    labelSmall: baseTextTheme.labelSmall?.copyWith(fontWeight: FontWeight.w700),
+  );
   final scheme =
       ColorScheme.fromSeed(
         seedColor: AppPalette.aubergine,
@@ -39,11 +77,7 @@ ThemeData buildAppTheme(Locale locale) {
     scaffoldBackgroundColor: AppPalette.ivory,
     fontFamily: fontFamily,
     fontFamilyFallback: const ['NotoSansBengali', 'Manrope', 'sans-serif'],
-    textTheme: ThemeData.light().textTheme.apply(
-      fontFamily: fontFamily,
-      bodyColor: AppPalette.ink,
-      displayColor: AppPalette.ink,
-    ),
+    textTheme: textTheme,
     appBarTheme: const AppBarTheme(
       backgroundColor: AppPalette.ivory,
       foregroundColor: AppPalette.ink,
@@ -86,14 +120,22 @@ ThemeData buildAppTheme(Locale locale) {
       style: FilledButton.styleFrom(
         backgroundColor: AppPalette.aubergine,
         foregroundColor: Colors.white,
+        textStyle: const TextStyle(fontWeight: FontWeight.w800),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         foregroundColor: AppPalette.aubergine,
+        textStyle: const TextStyle(fontWeight: FontWeight.w800),
         side: BorderSide(color: scheme.outline),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+    ),
+    textButtonTheme: TextButtonThemeData(
+      style: TextButton.styleFrom(
+        foregroundColor: AppPalette.aubergine,
+        textStyle: const TextStyle(fontWeight: FontWeight.w800),
       ),
     ),
     snackBarTheme: const SnackBarThemeData(
