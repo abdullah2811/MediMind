@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:medimind/app.dart';
 import 'package:medimind/core/localization/app_localization.dart';
 import 'package:medimind/core/localization/app_language_preference_store.dart';
+import 'package:medimind/core/widgets/medimind_logo.dart';
 import 'package:medimind/features/auth/domain/app_user.dart';
 import 'package:medimind/features/auth/domain/auth_repository.dart';
 import 'package:medimind/features/auth/data/session_activity_store.dart';
@@ -123,6 +124,19 @@ class FakeAuthRepository implements AuthRepository {
   AppUser? get currentUser => user;
 
   @override
+  Future<AppUser> signInWithEmailAndPassword({
+    required String email,
+    required String password,
+  }) async => user!;
+
+  @override
+  Future<AppUser> signUpWithEmailAndPassword({
+    required String email,
+    required String password,
+    required String displayName,
+  }) async => user!;
+
+  @override
   Future<void> sendPhoneVerificationCode({
     required String phoneNumber,
     required void Function(String verificationId) onCodeSent,
@@ -176,6 +190,7 @@ void main() {
 
     expect(find.text('মোবাইল নম্বর'), findsOneWidget);
     expect(find.text('জিমেইল অ্যাকাউন্ট'), findsOneWidget);
+    expect(find.byType(MediMindLogo), findsOneWidget);
     expect(find.text('Email address'), findsNothing);
     expect(find.text('Password'), findsNothing);
     expect(find.text('Sign up'), findsNothing);
@@ -233,6 +248,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.byType(MediMindLogo), findsOneWidget);
     expect(find.byKey(const ValueKey('hero-now-time')), findsOneWidget);
     final currentTime = tester.widget<Text>(
       find.byKey(const ValueKey('hero-now-time')),
@@ -489,6 +505,10 @@ void main() {
 
     final reminder = find.byKey(const ValueKey('foreground-medicine-reminder'));
     expect(reminder, findsOneWidget);
+    expect(
+      find.descendant(of: reminder, matching: find.byType(MediMindLogo)),
+      findsOneWidget,
+    );
     expect(
       find.descendant(of: reminder, matching: find.text('Reminder: Medicine')),
       findsOneWidget,

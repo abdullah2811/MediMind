@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/medimind_logo.dart';
 import '../../domain/auth_repository.dart';
 import 'phone_sign_in_page.dart';
 
@@ -74,33 +75,22 @@ class _SignInPageState extends State<SignInPage> {
                         ),
                         const SizedBox(height: 36),
                         Align(
-                          child: Container(
-                            width: 86,
-                            height: 86,
+                          child: DecoratedBox(
                             decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [
-                                  AppPalette.aubergine,
-                                  AppPalette.persimmon,
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              borderRadius: BorderRadius.circular(27),
+                              borderRadius: BorderRadius.circular(22),
                               boxShadow: [
                                 BoxShadow(
                                   color: AppPalette.aubergine.withValues(
-                                    alpha: 0.22,
+                                    alpha: 0.2,
                                   ),
                                   blurRadius: 24,
-                                  offset: const Offset(0, 12),
+                                  offset: const Offset(0, 10),
                                 ),
                               ],
                             ),
-                            child: const Icon(
-                              Icons.medication_rounded,
-                              size: 42,
-                              color: Colors.white,
+                            child: const MediMindLogo(
+                              size: 92,
+                              borderRadius: 22,
                             ),
                           ),
                         ),

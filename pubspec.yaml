@@ -76,6 +76,7 @@ flutter:
   assets:
     - assets/fonts/Manrope-OFL.txt
     - assets/fonts/NotoSansBengali-OFL.txt
+    - assets/images/medimind_logo.png
 
   fonts:
     - family: Manrope

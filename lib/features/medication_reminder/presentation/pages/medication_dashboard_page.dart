@@ -9,6 +9,7 @@ import '../../../../core/formatting/app_time_format.dart';
 import '../../../../core/localization/app_localization.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/widgets/inline_button_progress.dart';
+import '../../../../core/widgets/medimind_logo.dart';
 import '../../data/services/medication_notification_service.dart';
 import '../../domain/models/medication.dart';
 import '../../domain/repositories/medication_repository.dart';
@@ -723,12 +724,25 @@ class _MedicationDashboardPageState extends State<MedicationDashboardPage>
                     pinned: true,
                     backgroundColor: AppPalette.ivory,
                     elevation: 0,
-                    title: const Text(
-                      'MediMind',
-                      style: TextStyle(
-                        fontSize: 30,
-                        fontWeight: FontWeight.w800,
-                      ),
+                    titleSpacing: 12,
+                    title: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const MediMindLogo(size: 34),
+                        if (MediaQuery.sizeOf(context).width >= 460) ...[
+                          const SizedBox(width: 9),
+                          const Flexible(
+                            child: Text(
+                              'MediMind',
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 26,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     actions: [
                       IconButton(
@@ -1021,19 +1035,7 @@ class _ForegroundMedicineReminderCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: const BoxDecoration(
-                    color: AppPalette.aubergine,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.medication_rounded,
-                    color: Colors.white,
-                    size: 21,
-                  ),
-                ),
+                const MediMindLogo(size: 38),
                 const SizedBox(width: 11),
                 Expanded(
                   child: Text(
